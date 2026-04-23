@@ -37,6 +37,7 @@ def navbar():
             ui.label("AutomaticRSS").classes("text-xl font-bold tracking-wide")
             ui.link("Feeds",     "/feeds").classes("text-white hover:text-gray-300")
             ui.link("Downloads", "/downloads").classes("text-white hover:text-gray-300")
+            ui.link("Filtre",    "/filters").classes("text-white hover:text-gray-300")
             ui.link("Settings",  "/settings").classes("text-white hover:text-gray-300")
 
             ui.space()
