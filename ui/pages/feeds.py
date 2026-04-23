@@ -13,6 +13,7 @@ def _load_feeds():
             {
                 "id": f.id, "name": f.name, "url": f.url,
                 "source_type": f.source_type, "indexer_id": f.indexer_id,
+                "categories": f.categories or [],
                 "poll_interval_minutes": f.poll_interval_minutes, "is_active": f.is_active,
             }
             for f in rows
@@ -41,18 +42,20 @@ def feeds_page():
                     return
                 with list_container:
                     columns = [
-                        {"name": "name",     "label": "Nume",     "field": "name",     "align": "left"},
-                        {"name": "type",     "label": "Tip",      "field": "source_type"},
-                        {"name": "source",   "label": "Sursă",    "field": "source",   "align": "left"},
-                        {"name": "interval", "label": "Interval", "field": "poll_interval_minutes"},
-                        {"name": "active",   "label": "Activ",    "field": "is_active"},
-                        {"name": "actions",  "label": "",         "field": "id"},
+                        {"name": "name",       "label": "Nume",       "field": "name",       "align": "left"},
+                        {"name": "type",       "label": "Tip",        "field": "source_type"},
+                        {"name": "source",     "label": "Sursă",      "field": "source",     "align": "left"},
+                        {"name": "categories", "label": "Categorii",  "field": "cats",       "align": "left"},
+                        {"name": "interval",   "label": "Interval",   "field": "poll_interval_minutes"},
+                        {"name": "active",     "label": "Activ",      "field": "is_active"},
+                        {"name": "actions",    "label": "",           "field": "id"},
                     ]
                     rows = []
                     for f in feeds:
                         rows.append({
                             **f,
                             "source": f["indexer_id"] if f["source_type"] == "cardigann" else f["url"],
+                            "cats": ", ".join(f["categories"]) if f.get("categories") else "toate",
                         })
 
                     table = ui.table(columns=columns, rows=rows, row_key="id").classes("w-full")
@@ -144,13 +147,15 @@ def feeds_page():
                     ui.button("Salvează", on_click=lambda: on_save_rss())
 
                 validate_status = ui.label("").classes("text-sm text-gray-500")
-                categories_row = ui.row().classes("flex-wrap gap-2 mt-1 hidden")
+                categories_section = ui.column().classes("w-full gap-1 hidden")
+                selected_cats: dict = {"checkboxes": {}}
 
                 def on_validate():
                     validate_status.set_text("Se verifică...")
                     validate_status.classes(replace="text-sm text-gray-500")
-                    categories_row.classes(add="hidden")
-                    categories_row.clear()
+                    categories_section.classes(add="hidden")
+                    categories_section.clear()
+                    selected_cats["checkboxes"] = {}
                     ok, msg = validate_feed(url_input.value)
                     if not ok:
                         validate_status.set_text(f"✘ {msg}")
@@ -161,27 +166,36 @@ def feeds_page():
                     items = fetch_feed(url_input.value)
                     cats = sorted(set(i["category"] for i in items if i.get("category")))
                     if cats:
-                        categories_row.classes(remove="hidden")
-                        with categories_row:
-                            ui.label("Categorii:").classes("text-xs text-gray-500")
-                            for cat in cats:
-                                ui.badge(cat).classes("text-xs")
+                        categories_section.classes(remove="hidden")
+                        with categories_section:
+                            ui.label("Filtrează categorii (gol = toate):").classes("text-xs text-gray-400")
+                            with ui.row().classes("flex-wrap gap-3"):
+                                for cat in cats:
+                                    cb = ui.checkbox(cat)
+                                    selected_cats["checkboxes"][cat] = cb
+                    else:
+                        categories_section.classes(remove="hidden")
+                        with categories_section:
+                            ui.label("Nicio categorie detectată — se indexează tot feed-ul.").classes("text-xs text-gray-400")
 
                 def on_save_rss():
                     if not url_input.value or not name_input.value:
                         ui.notify("Completează URL și nume", type="warning")
                         return
+                    cats = [cat for cat, cb in selected_cats["checkboxes"].items() if cb.value]
                     with Session() as s:
                         s.add(Feed(
                             name=name_input.value, url=url_input.value,
                             source_type="rss", poll_interval_minutes=int(interval_input.value),
+                            categories=cats if cats else None,
                             is_active=True,
                         ))
                         s.commit()
                     url_input.set_value("")
                     name_input.set_value("")
                     validate_status.set_text("")
-                    categories_row.classes(add="hidden")
+                    categories_section.classes(add="hidden")
+                    selected_cats["checkboxes"] = {}
                     ui.notify("Feed adăugat", type="positive")
                     refresh_list()
 
@@ -252,19 +266,31 @@ def feeds_page():
 
                     def handle_add(e):
                         meta = e.args
-                        with ui.dialog() as dlg, ui.card().classes("p-4 gap-3 min-w-80"):
+                        with ui.dialog() as dlg, ui.card().classes("p-4 gap-3 min-w-96"):
                             ui.label(f"Adaugă: {meta['name']}").classes("font-bold text-lg")
                             name_in = ui.input("Nume prietenos", value=meta["name"]).classes("w-full")
                             intv = ui.number("Interval (minute)", value=60, min=5).classes("w-full")
+
+                            cat_checks: dict = {}
+                            meta_cats = meta.get("categories", [])
+                            if meta_cats:
+                                ui.label("Filtrează categorii (gol = toate):").classes("text-xs text-gray-400 mt-2")
+                                with ui.row().classes("flex-wrap gap-3"):
+                                    for cat in meta_cats:
+                                        cb = ui.checkbox(cat)
+                                        cat_checks[cat] = cb
+
                             with ui.row().classes("justify-end gap-2 mt-2"):
                                 ui.button("Anulează", on_click=dlg.close).props("flat")
-                                def confirm(m=meta, ni=name_in, iv=intv):
+                                def confirm(m=meta, ni=name_in, iv=intv, cc=cat_checks):
+                                    cats = [c for c, cb in cc.items() if cb.value]
                                     with Session() as sess:
                                         sess.add(Feed(
                                             name=ni.value, url="",
                                             source_type="cardigann",
                                             indexer_id=m["id"],
                                             poll_interval_minutes=int(iv.value),
+                                            categories=cats if cats else None,
                                             is_active=True,
                                         ))
                                         sess.commit()

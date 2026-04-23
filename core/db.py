@@ -19,6 +19,7 @@ class Feed(Base):
     url = Column(Text, nullable=False)
     source_type = Column(String(50), default="rss")  # rss | cardigann
     indexer_id = Column(String(100), nullable=True)  # pentru cardigann
+    categories = Column(JSON, nullable=True)  # [] = toate categoriile
     poll_interval_minutes = Column(Integer, default=60)
     is_active = Column(Boolean, default=True)
     last_checked_at = Column(DateTime, nullable=True)
