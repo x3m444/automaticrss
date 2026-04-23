@@ -1,14 +1,9 @@
 nicegui
 feedparser
 httpx
-beautifulsoup4
-lxml
 transmission-rpc
 apscheduler
 sqlalchemy
 psycopg2-binary
-python-dotenv
 toml
-jinja2
-pyyaml
 alembic

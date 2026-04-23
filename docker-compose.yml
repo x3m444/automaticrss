@@ -1,0 +1,41 @@
+services:
+
+  # ── Un singur container: AutomaticRSS + Transmission ─────────────────────────
+  # Avantaj: zero probleme de permisiuni, deployment simplu, un singur volum downloads
+  automaticrss:
+    build: .
+    container_name: automaticrss
+    ports:
+      - "${APP_PORT:-8080}:8080"    # interfață web
+      - "${TR_PORT:-9091}:9091"     # Transmission RPC (opțional, pt. acces extern)
+      - "51413:51413"               # torrente peers TCP
+      - "51413:51413/udp"           # torrente peers UDP
+    env_file: .env
+    volumes:
+      - downloads:/downloads            # descărcări torrente
+      - watch:/watch                    # drop .torrent = pornire automată
+      - transmission_config:/config     # config + state Transmission
+      - indexers_data:/app/indexers     # definițiile YAML, actualizate săptămânal
+    restart: unless-stopped
+
+  # ── Jackett (opțional — comentează blocul dacă nu-l folosești) ───────────────
+  jackett:
+    image: lscr.io/linuxserver/jackett:latest
+    container_name: jackett
+    ports:
+      - "${JACKETT_PORT:-9117}:9117"
+    environment:
+      - PUID=0                          # root în container, fără probleme permisiuni
+      - PGID=0
+      - TZ=${TZ:-Europe/Bucharest}
+    volumes:
+      - jackett_config:/config
+      - downloads:/downloads
+    restart: unless-stopped
+
+volumes:
+  downloads:            # partajat cu Jackett dacă e activ
+  watch:
+  transmission_config:
+  jackett_config:
+  indexers_data:

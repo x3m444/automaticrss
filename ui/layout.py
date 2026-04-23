@@ -36,6 +36,7 @@ def navbar():
         with ui.row().classes("w-full items-center gap-6 px-4 py-2"):
             ui.label("AutomaticRSS").classes("text-xl font-bold tracking-wide")
             ui.link("Feeds",     "/feeds").classes("text-white hover:text-gray-300")
+            ui.link("Reguli",    "/rules").classes("text-white hover:text-gray-300")
             ui.link("Downloads", "/downloads").classes("text-white hover:text-gray-300")
             ui.link("Filtre",    "/filters").classes("text-white hover:text-gray-300")
             ui.link("Settings",  "/settings").classes("text-white hover:text-gray-300")

@@ -1,0 +1,14 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.secrets/
+*.db
+*.sqlite
+.git/
+install.sh
+install.ps1
+start.bat
+start.sh

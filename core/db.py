@@ -17,23 +17,11 @@ class Feed(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
     url = Column(Text, nullable=False)
-    source_type = Column(String(50), default="rss")  # rss | cardigann
-    indexer_id = Column(String(100), nullable=True)  # pentru cardigann
-    categories = Column(JSON, nullable=True)  # [] = toate categoriile
+    source_type = Column(String(50), default="rss")
+    categories = Column(JSON, nullable=True)
     poll_interval_minutes = Column(Integer, default=60)
     is_active = Column(Boolean, default=True)
     last_checked_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
-class FilterRule(Base):
-    __tablename__ = "arss_filter_rules"
-
-    id = Column(Integer, primary_key=True)
-    feed_id = Column(Integer, nullable=False)
-    field = Column(String(50))   # title | size | category
-    operator = Column(String(20))  # contains | regex | gt | lt
-    value = Column(String(500))
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -64,6 +52,29 @@ class Setting(Base):
     id = Column(Integer, primary_key=True)
     key = Column(String(100), unique=True, nullable=False)
     value = Column(Text)
+
+
+class Rule(Base):
+    __tablename__ = "arss_rules"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False)
+    feed_ids = Column(JSON, default=list)      # [] = all active feeds
+    # Title matching: AND logic within each list
+    must_contain = Column(JSON, nullable=True)      # title must contain ALL terms
+    must_not_contain = Column(JSON, nullable=True)  # title must contain NONE of these
+    # Per-rule filter overrides (None = inherit global)
+    size_min_mb = Column(Integer, nullable=True)
+    size_max_gb = Column(Integer, nullable=True)
+    seeders_min = Column(Integer, nullable=True)
+    quality_banned = Column(JSON, nullable=True)
+    resolution_min = Column(String(20), nullable=True)
+    languages = Column(JSON, nullable=True)
+    title_blacklist = Column(JSON, nullable=True)
+    # Destination: stored as slash-joined path segments
+    download_subdir = Column(String(500), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 def init_db():

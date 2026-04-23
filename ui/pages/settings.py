@@ -40,10 +40,13 @@ def settings_page():
         # ── Transmission ────────────────────────────────────────────────
         with ui.card().classes("w-full max-w-xl gap-2"):
             ui.label("Transmission").classes("text-lg font-semibold")
+            # În Docker Compose hostul e "transmission" (numele serviciului), nu "localhost"
+            _default_host = os.getenv("TRANSMISSION_HOST", "localhost")
+            _default_port = os.getenv("TRANSMISSION_PORT", "9091")
 
             with Session() as s:
-                host_val = _get(s, "transmission_host", "localhost")
-                port_val = _get(s, "transmission_port", "9091")
+                host_val = _get(s, "transmission_host", _default_host)
+                port_val = _get(s, "transmission_port", _default_port)
                 user_val = _get(s, "transmission_user", "")
                 pass_val = _get(s, "transmission_pass", "")
                 dir_val  = _get(s, "transmission_download_dir", "")
@@ -124,3 +127,55 @@ def settings_page():
             with ui.row().classes("gap-2 mt-3"):
                 ui.button("Salvează", on_click=save)
                 ui.button("Testează conexiunea", on_click=test).props("outline")
+
+        # ── Jackett ──────────────────────────────────────────────────────
+        with ui.card().classes("w-full max-w-xl gap-2"):
+            with ui.row().classes("w-full justify-between items-center"):
+                ui.label("Jackett").classes("text-lg font-semibold")
+                ui.badge("opțional").props("outline color=grey")
+
+            ui.label(
+                "Dacă Jackett rulează (local sau în Docker), îl poți folosi ca sursă "
+                "alternativă pentru indexeri. API key-ul îl găsești în interfața Jackett."
+            ).classes("text-xs text-gray-400")
+
+            _default_jackett = os.getenv("JACKETT_URL", "http://localhost:9117")
+            with Session() as s:
+                jackett_url_val = _get(s, "jackett_url", _default_jackett)
+                jackett_key_val = _get(s, "jackett_api_key", "")
+
+            jackett_url = ui.input("URL Jackett", value=jackett_url_val).classes("w-full")
+            jackett_key = ui.input("API Key", value=jackett_key_val).classes("w-full")
+
+            jackett_status = ui.label("").classes("text-sm mt-1")
+
+            def save_jackett():
+                with Session() as s:
+                    _set(s, "jackett_url", jackett_url.value.rstrip("/"))
+                    _set(s, "jackett_api_key", jackett_key.value.strip())
+                    s.commit()
+                ui.notify("Jackett salvat", type="positive")
+
+            def test_jackett():
+                import httpx
+                jackett_status.set_text("Se testează...")
+                jackett_status.classes(replace="text-sm text-gray-500")
+                try:
+                    url = f"{jackett_url.value.rstrip('/')}/api/v2.0/server/config"
+                    params = {"apikey": jackett_key.value.strip()}
+                    r = httpx.get(url, params=params, timeout=5)
+                    if r.status_code == 200:
+                        data = r.json()
+                        version = data.get("version", "?")
+                        jackett_status.set_text(f"✔ Jackett v{version} — conectat")
+                        jackett_status.classes(replace="text-sm text-green-600")
+                    else:
+                        jackett_status.set_text(f"✘ HTTP {r.status_code} — verifică URL și API key")
+                        jackett_status.classes(replace="text-sm text-red-600")
+                except Exception as e:
+                    jackett_status.set_text(f"✘ {e}")
+                    jackett_status.classes(replace="text-sm text-red-600")
+
+            with ui.row().classes("gap-2 mt-2"):
+                ui.button("Salvează", on_click=save_jackett)
+                ui.button("Testează conexiunea", on_click=test_jackett).props("outline")
