@@ -58,8 +58,14 @@ def _send_to_transmission(item: dict, subdir: str | None) -> bool:
         client = Client(host=host, port=port, username=user, password=pwd)
         download_dir = f"{base_dir.rstrip('/')}/{subdir}" if subdir and base_dir else base_dir or None
 
-        magnet      = item.get("magnet") or item.get("link") or ""
-        torrent_url = item.get("torrent_url") or item.get("url") or ""
+        magnet = item.get("magnet") or item.get("link") or ""
+        has_getter = bool(item.get("_magnet_getter"))
+
+        # Scraper items: link points to a detail page — resolve magnet lazily
+        if not magnet.startswith("magnet:") and has_getter:
+            magnet = item["_magnet_getter"]() or ""
+
+        torrent_url = item.get("torrent_url") or ""
 
         kwargs = {}
         if download_dir:
@@ -67,7 +73,7 @@ def _send_to_transmission(item: dict, subdir: str | None) -> bool:
 
         if magnet.startswith("magnet:"):
             t = client.add_torrent(magnet, **kwargs)
-        elif torrent_url:
+        elif torrent_url and torrent_url.endswith(".torrent"):
             t = client.add_torrent(torrent_url, **kwargs)
         else:
             return False

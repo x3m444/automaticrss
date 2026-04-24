@@ -17,7 +17,8 @@ class Feed(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
     url = Column(Text, nullable=False)
-    source_type = Column(String(50), default="rss")
+    source_type = Column(String(50), default="rss")  # rss | scraper
+    indexer_id = Column(String(100), nullable=True)   # ex: "mypornclub"
     categories = Column(JSON, nullable=True)
     poll_interval_minutes = Column(Integer, default=60)
     is_active = Column(Boolean, default=True)

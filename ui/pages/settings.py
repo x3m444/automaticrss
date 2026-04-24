@@ -128,6 +128,50 @@ def settings_page():
                 ui.button("Salvează", on_click=save)
                 ui.button("Testează conexiunea", on_click=test).props("outline")
 
+        # ── FlareSolverr ─────────────────────────────────────────────────
+        with ui.card().classes("w-full max-w-xl gap-2"):
+            with ui.row().classes("w-full justify-between items-center"):
+                ui.label("FlareSolverr").classes("text-lg font-semibold")
+                ui.badge("opțional").props("outline color=grey")
+
+            ui.label(
+                "Dacă indexerii sunt protejați de Cloudflare, FlareSolverr rezolvă challenge-ul. "
+                "Lasă gol dacă nu îl folosești."
+            ).classes("text-xs text-gray-400")
+
+            _default_fs = os.getenv("FLARESOLVERR_URL", "")
+            with Session() as s:
+                fs_url_val = _get(s, "flaresolverr_url", _default_fs)
+
+            fs_url = ui.input("URL FlareSolverr", value=fs_url_val, placeholder="http://localhost:8191").classes("w-full")
+            fs_status = ui.label("").classes("text-sm mt-1")
+
+            def save_fs():
+                with Session() as s:
+                    _set(s, "flaresolverr_url", fs_url.value.rstrip("/"))
+                    s.commit()
+                ui.notify("FlareSolverr salvat", type="positive")
+
+            def test_fs():
+                import httpx as _httpx
+                fs_status.set_text("Se testează...")
+                fs_status.classes(replace="text-sm text-gray-500")
+                try:
+                    r = _httpx.get(f"{fs_url.value.rstrip('/')}/health", timeout=5)
+                    if r.status_code == 200:
+                        fs_status.set_text("✔ FlareSolverr online")
+                        fs_status.classes(replace="text-sm text-green-600")
+                    else:
+                        fs_status.set_text(f"✘ HTTP {r.status_code}")
+                        fs_status.classes(replace="text-sm text-red-600")
+                except Exception as e:
+                    fs_status.set_text(f"✘ {e}")
+                    fs_status.classes(replace="text-sm text-red-600")
+
+            with ui.row().classes("gap-2 mt-2"):
+                ui.button("Salvează", on_click=save_fs)
+                ui.button("Testează conexiunea", on_click=test_fs).props("outline")
+
         # ── Jackett ──────────────────────────────────────────────────────
         with ui.card().classes("w-full max-w-xl gap-2"):
             with ui.row().classes("w-full justify-between items-center"):

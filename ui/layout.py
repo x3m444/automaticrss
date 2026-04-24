@@ -74,7 +74,8 @@ def navbar():
                 tr_label.set_text(tr_msg)
 
             refresh()
-            ui.timer(30, refresh)
+#            ui.timer(30, refresh)
+            ui.timer(0.1, refresh, once=True)
 
     # dark mode activ implicit
     dark.enable()
