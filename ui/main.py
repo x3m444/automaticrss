@@ -1,5 +1,5 @@
 from nicegui import ui, app
-from ui.pages import feeds, downloads, settings, filters, rules
+from ui.pages import feeds, downloads, settings, filters, rules, watchlist
 
 
 @ui.page("/")

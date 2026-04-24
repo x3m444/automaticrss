@@ -1,5 +1,5 @@
 import re
-from core.db import Session, Rule, SeenItem, Download
+from core.db import Session, Rule, Watchlist, SeenItem, Download
 from core.filters import apply_global_filters, get_global_filters
 
 
@@ -92,9 +92,21 @@ def _send_to_transmission(item: dict, subdir: str | None) -> bool:
         return False
 
 
+def _matches_watchlist_term(title: str, entry: Watchlist) -> str | None:
+    """Returns the first matching term, or None if excluded or no match."""
+    t = title.lower()
+    for exc in (entry.exclusions or []):
+        if exc.lower() in t:
+            return None
+    for term in (entry.terms or []):
+        if term.lower() in t:
+            return term
+    return None
+
+
 def process_item(item: dict, feed_id: int) -> list[str]:
     """
-    Runs a feed item through all active rules.
+    Runs a feed item through all active rules and watchlist entries.
     Returns a list of action strings for logging.
     """
     guid = item.get("guid") or item.get("link") or item.get("title", "")
@@ -102,17 +114,16 @@ def process_item(item: dict, feed_id: int) -> list[str]:
         return []
 
     global_filters = get_global_filters()
-
-    with Session() as s:
-        rules = s.query(Rule).filter_by(is_active=True).all()
-
     matched_any = False
     actions = []
+
+    # ── Rules ────────────────────────────────────────────────────────────
+    with Session() as s:
+        rules = s.query(Rule).filter_by(is_active=True).all()
 
     for rule in rules:
         if rule.feed_ids and feed_id not in rule.feed_ids:
             continue
-
         if not _matches_rule(item.get("title", ""), rule):
             continue
 
@@ -128,6 +139,31 @@ def process_item(item: dict, feed_id: int) -> list[str]:
             actions.append(f"[{rule.name}] → Transmission ({rule.download_subdir or 'default'})")
         else:
             actions.append(f"[{rule.name}] eroare Transmission")
+
+    # ── Watchlist ────────────────────────────────────────────────────────
+    with Session() as s:
+        wl_entries = s.query(Watchlist).filter_by(is_active=True).all()
+
+    for entry in wl_entries:
+        if entry.feed_ids and feed_id not in entry.feed_ids:
+            continue
+
+        matched_term = _matches_watchlist_term(item.get("title", ""), entry)
+        if not matched_term:
+            continue
+
+        passed, _ = apply_global_filters(item, global_filters)
+        if not passed:
+            continue
+
+        sent = _send_to_transmission(item, entry.download_subdir)
+        if sent:
+            matched_any = True
+            actions.append(
+                f"[WL:{entry.name}] \"{matched_term}\" → {entry.download_subdir or 'default'}"
+            )
+        else:
+            actions.append(f"[WL:{entry.name}] eroare Transmission")
 
     if matched_any:
         _mark_seen(feed_id, guid, item.get("title", ""))

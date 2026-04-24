@@ -78,5 +78,18 @@ class Rule(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class Watchlist(Base):
+    __tablename__ = "arss_watchlist"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False)
+    terms = Column(JSON, default=list)        # OR logic — any term in title triggers
+    exclusions = Column(JSON, default=list)   # none of these may appear in title
+    download_subdir = Column(String(500), nullable=True)
+    feed_ids = Column(JSON, default=list)     # [] = toate feed-urile active
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 def init_db():
     Base.metadata.create_all(engine)
