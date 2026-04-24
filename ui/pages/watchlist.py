@@ -33,7 +33,7 @@ def _load_feeds():
 
 
 def _chip_input(label: str, chips: list[str], color: str = "primary"):
-    """Returns (container_row, input_field, add_fn) for a reusable chip input."""
+    """Chip input: Enter sau paste → chip întreg (fără auto-split pe spații)."""
     ui.label(label).classes("text-sm font-medium")
     row = ui.row().classes("flex-wrap gap-2 min-h-8 items-center")
 
@@ -51,25 +51,28 @@ def _chip_input(label: str, chips: list[str], color: str = "primary"):
 
     render()
 
-    def add_terms(raw: str):
-        for part in raw.split():
-            part = part.strip()
-            if part and part not in chips:
-                chips.append(part)
-        render()
+    def _add_single(val: str):
+        val = val.strip()
+        if val and val not in chips:
+            chips.append(val)
+            render()
 
     with ui.row().classes("items-center gap-1"):
-        inp = ui.input(placeholder="scrieți sau lipiți termeni").classes("w-64")
+        # on_value_change=lambda e: None forțează NiceGUI să sincronizeze
+        # valoarea pe server la fiecare keystroke/paste
+        inp = ui.input(
+            placeholder="scrieți sau lipiți, apoi Enter",
+            on_value_change=lambda e: None,
+        ).classes("w-72")
 
         def _add(_=None):
-            val = inp.value.strip()
-            if val:
-                add_terms(val)
+            _add_single(inp.value)
             inp.set_value("")
 
         inp.on("keydown.enter", _add)
-        # paste → auto-split (spaces → separate chips)
-        inp.on("keyup", lambda e: _add() if " " in inp.value else None)
+        # paste: valoarea e sincronizată via on_value_change,
+        # timerul de 0.1s e suficient pentru un round-trip WebSocket
+        inp.on("paste", lambda e: ui.timer(0.1, _add, once=True))
         ui.button(icon="add", on_click=_add).props("flat dense round")
 
     return render
