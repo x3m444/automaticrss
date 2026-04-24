@@ -72,6 +72,47 @@ class ThePirateBay(BaseScraper):
         "100699": "Other Other",
     }
 
+    def search(self, query: str, flaresolverr_url: str | None = None) -> list[dict]:
+        try:
+            r = httpx.get(
+                f"{_API}/q.php",
+                params={"q": query, "cat": "0"},
+                headers=_HEADERS,
+                timeout=15,
+            )
+            r.raise_for_status()
+            data = r.json()
+            if not isinstance(data, list) or (data and data[0].get("id") == "0"):
+                return []
+            seen: set[str] = set()
+            items = []
+            for row in data:
+                ih = (row.get("info_hash") or "").lower()
+                if not ih or ih in seen:
+                    continue
+                seen.add(ih)
+                name = row.get("name", "")
+                magnet = (
+                    f"magnet:?xt=urn:btih:{ih}"
+                    f"&dn={quote(name)}"
+                    f"&tr={_TRACKERS}"
+                )
+                size_b = int(row.get("size", 0) or 0)
+                items.append({
+                    "title":      name,
+                    "guid":       ih,
+                    "magnet":     magnet,
+                    "size":       fmt_size(size_b),
+                    "size_bytes": size_b,
+                    "seeders":    parse_int(row.get("seeders", 0)),
+                    "leechers":   parse_int(row.get("leechers", 0)),
+                    "category":   str(row.get("category", "")),
+                    "source":     self.name,
+                })
+            return items
+        except Exception:
+            return []
+
     def fetch_latest(
         self,
         categories: list[str] | None = None,

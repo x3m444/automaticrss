@@ -74,6 +74,50 @@ class YTS(BaseScraper):
         "western":      "Western",
     }
 
+    def search(self, query: str, flaresolverr_url: str | None = None) -> list[dict]:
+        try:
+            r = httpx.get(
+                _API,
+                params={"query_term": query, "sort_by": "rating", "limit": 50},
+                timeout=15,
+            )
+            r.raise_for_status()
+            movies = r.json().get("data", {}).get("movies") or []
+            seen: set[str] = set()
+            items = []
+            for movie in movies:
+                for torrent in movie.get("torrents") or []:
+                    ih = (torrent.get("hash") or "").lower()
+                    if not ih or ih in seen:
+                        continue
+                    seen.add(ih)
+                    quality = torrent.get("quality", "")
+                    title = (
+                        f"{movie.get('title', '?')} "
+                        f"({movie.get('year', '')}) "
+                        f"[{quality}]"
+                    )
+                    magnet = (
+                        f"magnet:?xt=urn:btih:{ih}"
+                        f"&dn={quote(title)}"
+                        f"&tr={_TRACKERS}"
+                    )
+                    size_b = torrent.get("size_bytes") or 0
+                    items.append({
+                        "title":      title,
+                        "guid":       ih,
+                        "magnet":     magnet,
+                        "size":       torrent.get("size") or fmt_size(size_b),
+                        "size_bytes": size_b,
+                        "seeders":    torrent.get("seeds") or 0,
+                        "leechers":   torrent.get("peers") or 0,
+                        "category":   "movies",
+                        "source":     self.name,
+                    })
+            return items
+        except Exception:
+            return []
+
     def fetch_latest(
         self,
         categories: list[str] | None = None,

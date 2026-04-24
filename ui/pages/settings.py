@@ -115,15 +115,6 @@ def settings_page():
                     conn_status.set_text(f"✘ {e}")
                     conn_status.classes(replace="text-sm text-red-600")
 
-            # auto-populare la încărcarea paginii
-            if not dir_val:
-                try:
-                    c = _connect()
-                    session = c.get_session()
-                    _apply_session(session, len(c.get_torrents()))
-                except Exception:
-                    pass
-
             with ui.row().classes("gap-2 mt-3"):
                 ui.button("Salvează", on_click=save)
                 ui.button("Testează conexiunea", on_click=test).props("outline")
@@ -223,3 +214,40 @@ def settings_page():
             with ui.row().classes("gap-2 mt-2"):
                 ui.button("Salvează", on_click=save_jackett)
                 ui.button("Testează conexiunea", on_click=test_jackett).props("outline")
+
+        # ── Conexiuni sistem ─────────────────────────────────────────────
+        with ui.card().classes("w-full max-w-xl gap-2"):
+            ui.label("Conexiuni sistem").classes("text-lg font-semibold")
+            ui.label("Testează manual conexiunile la pornire sau după modificări.").classes("text-xs text-gray-400")
+
+            db_status = ui.label("").classes("text-sm")
+            tr_status2 = ui.label("").classes("text-sm")
+
+            def test_db():
+                db_status.set_text("Se testează...")
+                db_status.classes(replace="text-sm text-gray-500")
+                try:
+                    import sqlalchemy
+                    with Session() as s:
+                        s.execute(sqlalchemy.text("SELECT 1"))
+                    db_status.set_text("✔ Baza de date — conectată")
+                    db_status.classes(replace="text-sm text-green-600")
+                except Exception as e:
+                    db_status.set_text(f"✘ DB: {e}")
+                    db_status.classes(replace="text-sm text-red-600")
+
+            def test_tr2():
+                tr_status2.set_text("Se testează...")
+                tr_status2.classes(replace="text-sm text-gray-500")
+                try:
+                    c = _connect()
+                    session = c.get_session()
+                    tr_status2.set_text(f"✔ Transmission — conectat (v{session.version})")
+                    tr_status2.classes(replace="text-sm text-green-600")
+                except Exception as e:
+                    tr_status2.set_text(f"✘ Transmission: {e}")
+                    tr_status2.classes(replace="text-sm text-red-600")
+
+            with ui.row().classes("gap-2"):
+                ui.button("Test DB", on_click=test_db).props("outline")
+                ui.button("Test Transmission", on_click=test_tr2).props("outline")

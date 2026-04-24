@@ -51,6 +51,20 @@ class TheRARBG(BaseScraper):
         "8000": "Other",
     }
 
+    def search(self, query: str, flaresolverr_url: str | None = None) -> list[dict]:
+        try:
+            from urllib.parse import quote
+            html = http_get(
+                f"{_BASE}/get-posts/keywords:{quote(query, safe='')}:time:30D/",
+                flaresolverr_url=flaresolverr_url,
+            )
+            items = _parse_html(html, "search")
+            for i in items:
+                i["source"] = self.name
+            return items
+        except Exception:
+            return []
+
     def fetch_latest(
         self,
         categories: list[str] | None = None,

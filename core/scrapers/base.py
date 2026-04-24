@@ -73,5 +73,12 @@ class BaseScraper:
     ) -> list[dict]:
         raise NotImplementedError
 
+    def search(
+        self,
+        query: str,
+        flaresolverr_url: str | None = None,
+    ) -> list[dict]:
+        raise NotImplementedError
+
     def get_magnet(self, detail_url: str, flaresolverr_url: str | None = None) -> str | None:
         return None

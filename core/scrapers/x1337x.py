@@ -188,6 +188,20 @@ class X1337x(BaseScraper):
         "100047": "Other/Nulled Script",
     }
 
+    def search(self, query: str, flaresolverr_url: str | None = None) -> list[dict]:
+        try:
+            from urllib.parse import quote
+            html = http_get(
+                f"{_BASE}/search/{quote(query, safe='')}/1/",
+                flaresolverr_url=flaresolverr_url,
+            )
+            items = _parse_listing(html)
+            for i in items:
+                i["source"] = self.name
+            return items
+        except Exception:
+            return []
+
     def fetch_latest(
         self,
         categories: list[str] | None = None,

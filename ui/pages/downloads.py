@@ -1,4 +1,4 @@
-from nicegui import ui
+from nicegui import ui, run
 from ui.layout import navbar
 from core.db import Session, Setting
 
@@ -57,11 +57,13 @@ def downloads_page():
         err_label = ui.label("").classes("text-sm text-red-400 hidden")
         table_container = ui.element("div").classes("w-full")
 
-        def refresh():
+        def _fetch_data():
+            client = _connect_transmission()
+            return client.get_torrents(), client.get_session()
+
+        async def refresh():
             try:
-                client = _connect_transmission()
-                torrents = client.get_torrents()
-                session = client.get_session()
+                torrents, session = await run.io_bound(_fetch_data)
 
                 total_down = sum(t.rateDownload for t in torrents if t.rateDownload)
                 total_up   = sum(t.rateUpload   for t in torrents if t.rateUpload)
@@ -139,21 +141,23 @@ def downloads_page():
                         </q-td>
                     """)
 
-                    def handle_toggle(e):
+                    async def handle_toggle(e):
                         tid = e.args["id"]
                         status = e.args["status"]
-                        c = _connect_transmission()
-                        if status == "stopped":
-                            c.start_torrent(tid)
-                        else:
-                            c.stop_torrent(tid)
-                        refresh()
+                        def _do():
+                            c = _connect_transmission()
+                            if status == "stopped":
+                                c.start_torrent(tid)
+                            else:
+                                c.stop_torrent(tid)
+                        await run.io_bound(_do)
+                        await refresh()
 
-                    def handle_remove(e):
-                        c = _connect_transmission()
-                        c.remove_torrent(e.args["id"], delete_data=False)
+                    async def handle_remove(e):
+                        tid = e.args["id"]
+                        await run.io_bound(lambda: _connect_transmission().remove_torrent(tid, delete_data=False))
                         ui.notify("Torrent eliminat (fișierele rămân)", type="warning")
-                        refresh()
+                        await refresh()
 
                     tbl.on("toggle", handle_toggle)
                     tbl.on("remove", handle_remove)
@@ -162,5 +166,5 @@ def downloads_page():
                 err_label.set_text(f"Transmission offline: {ex}")
                 err_label.classes(remove="hidden")
 
-        refresh()
-        ui.timer(10, refresh)
+        ui.timer(0.1, refresh, once=True)
+        ui.timer(15, refresh)

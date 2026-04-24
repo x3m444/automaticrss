@@ -58,11 +58,8 @@ def _chip_input(label: str, chips: list[str], color: str = "primary"):
             render()
 
     with ui.row().classes("items-center gap-1"):
-        # on_value_change=lambda e: None forțează NiceGUI să sincronizeze
-        # valoarea pe server la fiecare keystroke/paste
         inp = ui.input(
             placeholder="scrieți sau lipiți, apoi Enter",
-            on_value_change=lambda e: None,
         ).classes("w-72")
 
         def _add(_=None):

@@ -1,7 +1,28 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python main.py)"
+      "Bash(python main.py)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8080/settings)",
+      "Read(//tmp/**)",
+      "Read(//c/Users/xhams/AppData/Local/Temp/**)",
+      "Bash(netstat -ano)",
+      "Bash(tasklist)",
+      "PowerShell(Stop-Process -Id 20348 -Force)",
+      "PowerShell(Stop-Process -Id 20532 -Force -ErrorAction SilentlyContinue)",
+      "Bash(venv/Scripts/pip install *)",
+      "Bash(taskkill /F /IM python.exe)",
+      "Bash(venv/Scripts/python.exe main.py)",
+      "PowerShell(Stop-Process -Id \\(Get-NetTCPConnection -LocalPort 8080 -State Listen\\).OwningProcess -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2; Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue)",
+      "Bash(awk '{print $5}')",
+      "Bash(xargs -I{} taskkill /PID {} /F)",
+      "Bash(taskkill /PID 19664 /F /T)",
+      "Bash(taskkill /PID 1684 /F /T)",
+      "Bash(venv/Scripts/python.exe -c ' *)",
+      "Bash(curl -s \"http://127.0.0.1:9117/api/v2.0/indexers/thepiratebay/results/torznab/api?apikey=jdykbsoh27hb6zcuqvjb092nqvfaa57y&t=search&cat=&q=\")",
+      "Bash(curl -s \"http://127.0.0.1:9117/api/v2.0/indexers/thepiratebay/results/torznab/api?apikey=jdykbsoh27hb6zcuqvjb092nqvfaa57y&t=search&cat=6000&q=\")",
+      "Bash(python -c ' *)",
+      "Bash(taskkill /PID 19444 /F)",
+      "PowerShell(Stop-Process -Id \\(Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess -Force -ErrorAction SilentlyContinue; Write-Host \"Oprit\")"
     ]
   }
 }
