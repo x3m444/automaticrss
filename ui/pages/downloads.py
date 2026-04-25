@@ -1,32 +1,21 @@
-from nicegui import ui, run
+import os
+import subprocess
+import platform
+from pathlib import Path
+from nicegui import ui, run, app
 from ui.layout import navbar
-from core.db import Session, Setting
+from core.db import Session, Setting, Instance
+from core.config import INSTANCE_ID
 
 
-def _get_setting(key, default=""):
+VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".ts", ".m4v", ".webm", ".mpg", ".mpeg"}
+SUBTITLE_EXTS = {".srt", ".ass", ".ssa", ".sub", ".vtt"}
+
+
+def _get_dl_dir() -> str:
     with Session() as s:
-        row = s.query(Setting).filter_by(key=key).first()
-        return row.value if row else default
-
-
-def _connect_transmission():
-    from transmission_rpc import Client
-    return Client(
-        host=_get_setting("transmission_host", "localhost"),
-        port=int(_get_setting("transmission_port", "9091")),
-        username=_get_setting("transmission_user", ""),
-        password=_get_setting("transmission_pass", ""),
-    )
-
-
-def _status_color(status: str) -> str:
-    return {
-        "downloading": "blue",
-        "seeding":     "green",
-        "stopped":     "grey",
-        "checking":    "orange",
-        "queued":      "purple",
-    }.get(status.lower(), "grey")
+        inst = s.query(Instance).filter_by(id=INSTANCE_ID).first()
+        return inst.download_dir if inst and inst.download_dir else ""
 
 
 def _fmt_size(n: int) -> str:
@@ -39,132 +28,265 @@ def _fmt_size(n: int) -> str:
     return f"{n:.1f} TB"
 
 
-def _fmt_speed(n: int) -> str:
-    if not n:
-        return ""
-    return f"{n/1024:.0f} KB/s" if n < 1024*1024 else f"{n/1024/1024:.1f} MB/s"
+def _dir_size(path: Path) -> int:
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def _fetch_transmission() -> dict[str, dict]:
+    """Returns {torrent_name: {id, status, percent, hash}} keyed by folder/file name."""
+    try:
+        from transmission_rpc import Client
+        from core.instance import get_instance
+        inst = get_instance()
+        client = Client(
+            host=inst["transmission_host"],
+            port=inst["transmission_port"],
+            username=inst["transmission_user"],
+            password=inst["transmission_pass"],
+        )
+        result = {}
+        for t in client.get_torrents():
+            result[t.name] = {
+                "id":      t.id,
+                "status":  t.status or "unknown",
+                "percent": round((t.percentDone or 0) * 100, 1),
+                "hash":    t.hashString or "",
+            }
+        return result
+    except Exception:
+        return {}
+
+
+def _delete_torrent(torrent_id: int, delete_data: bool = True):
+    try:
+        from transmission_rpc import Client
+        from core.instance import get_instance
+        inst = get_instance()
+        client = Client(
+            host=inst["transmission_host"],
+            port=inst["transmission_port"],
+            username=inst["transmission_user"],
+            password=inst["transmission_pass"],
+        )
+        client.remove_torrent(torrent_id, delete_data=delete_data)
+        return True
+    except Exception:
+        return False
+
+
+def _delete_path(path: Path):
+    import shutil
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    elif path.is_file():
+        path.unlink(missing_ok=True)
+
+
+def _open_with_system(filepath: str):
+    try:
+        if platform.system() == "Windows":
+            os.startfile(filepath)
+        elif platform.system() == "Darwin":
+            subprocess.Popen(["open", filepath])
+        else:
+            subprocess.Popen(["xdg-open", filepath])
+    except Exception:
+        pass
+
+
+def _media_url(filepath: str, dl_dir: str) -> str:
+    rel = Path(filepath).relative_to(Path(dl_dir))
+    return "/media/" + rel.as_posix()
+
+
+def _show_player(title: str, url: str):
+    with ui.dialog().props("maximized") as dlg:
+        with ui.card().classes("w-full h-full bg-black flex flex-col items-center justify-center gap-4"):
+            with ui.row().classes("w-full justify-between items-center px-4 pt-2"):
+                ui.label(title).classes("text-white text-sm truncate max-w-2xl")
+                ui.button(icon="close", on_click=dlg.close).props("flat dense round color=white")
+
+            ui.html(f'<video id="arss-player" controls autoplay '
+                    f'style="max-width:100%;max-height:80vh;outline:none;background:#000" '
+                    f'src="{url}">Browserul tău nu suportă tag-ul video.</video>')
+
+    dlg.open()
+    ui.timer(0.4, lambda: ui.run_javascript("""
+        (function() {
+            var v = document.getElementById('arss-player');
+            if (!v || v.__wheelBound) return;
+            v.__wheelBound = true;
+            v.addEventListener('wheel', function(e) {
+                e.preventDefault();
+                v.currentTime = Math.max(0, v.currentTime + (e.deltaY > 0 ? -5 : 5));
+            }, { passive: false });
+        })();
+    """), once=True)
+
+
+def _status_badge(info: dict | None):
+    if not info:
+        return
+    status = info["status"]
+    pct    = info["percent"]
+    color  = {
+        "downloading": "blue",
+        "seeding":     "green",
+        "stopped":     "grey",
+        "checking":    "orange",
+        "queued":      "purple",
+    }.get(status, "grey")
+    label = f"{status} {pct}%" if status == "downloading" else status
+    ui.badge(label, color=color)
+
+
+def _render_file(f: Path, dl_dir: str, indent: int = 0):
+    ext = f.suffix.lower()
+    is_video    = ext in VIDEO_EXTS
+    is_subtitle = ext in SUBTITLE_EXTS
+    size_str    = _fmt_size(f.stat().st_size)
+
+    icon = "movie" if is_video else ("subtitles" if is_subtitle else "insert_drive_file")
+    color = "primary" if is_video else ("purple" if is_subtitle else "grey")
+
+    with ui.row().classes("w-full items-center gap-2 py-0.5").style(f"padding-left:{indent * 20}px"):
+        ui.icon(icon, color=color).classes("text-base shrink-0")
+        ui.label(f.name).classes("flex-1 text-sm truncate")
+        ui.label(size_str).classes("text-xs text-gray-400 shrink-0 w-20 text-right")
+
+        if is_video:
+            url = _media_url(str(f), dl_dir)
+
+            def play(u=url, n=f.name):
+                _show_player(n, u)
+
+            def open_sys(fp=str(f)):
+                _open_with_system(fp)
+
+            ui.button(icon="play_circle", on_click=play).props(
+                "flat dense round color=primary"
+            ).tooltip("Redă în browser")
+            ui.button(icon="open_in_new", on_click=open_sys).props(
+                "flat dense round color=grey"
+            ).tooltip("Deschide cu player sistem")
+
+
+def _render_dir(path: Path, dl_dir: str, indent: int = 0, transmission_info: dict | None = None):
+    """Renders a directory as an expandable expansion panel."""
+    size_str = _fmt_size(_dir_size(path))
+
+    header_text = path.name
+
+    with ui.expansion(header_text).classes("w-full").props("dense") as exp:
+        # header slot — injectăm badge și size în label
+        with exp.add_slot("header"):
+            with ui.row().classes("w-full items-center gap-2 flex-1"):
+                ui.icon("folder", color="yellow").classes("text-base shrink-0")
+                ui.label(header_text).classes("flex-1 text-sm font-medium truncate")
+                ui.label(size_str).classes("text-xs text-gray-400 shrink-0")
+                if transmission_info:
+                    _status_badge(transmission_info)
+
+        # conținut
+        children = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+        for child in children:
+            if child.is_dir():
+                _render_dir(child, dl_dir, indent + 1)
+            else:
+                _render_file(child, dl_dir, indent + 1)
 
 
 @ui.page("/downloads")
 def downloads_page():
     navbar()
 
-    with ui.column().classes("w-full p-6 gap-4 max-w-6xl"):
+    with ui.column().classes("w-full p-6 gap-4"):
         with ui.row().classes("w-full items-center justify-between"):
             ui.label("Downloads").classes("text-2xl font-bold")
-            status_label = ui.label("").classes("text-xs text-gray-400")
+            refresh_btn = ui.button(icon="refresh").props("flat round dense")
+            status_lbl  = ui.label("").classes("text-xs text-gray-400")
 
-        err_label = ui.label("").classes("text-sm text-red-400 hidden")
-        table_container = ui.element("div").classes("w-full")
-
-        def _fetch_data():
-            client = _connect_transmission()
-            return client.get_torrents(), client.get_session()
+        err_lbl   = ui.label("").classes("text-sm text-red-400")
+        container = ui.column().classes("w-full gap-2")
 
         async def refresh():
-            try:
-                torrents, session = await run.io_bound(_fetch_data)
+            refresh_btn.props(add="loading")
+            err_lbl.set_text("")
 
-                total_down = sum(t.rateDownload for t in torrents if t.rateDownload)
-                total_up   = sum(t.rateUpload   for t in torrents if t.rateUpload)
+            dl_dir = await run.io_bound(_get_dl_dir)
+            if not dl_dir or not Path(dl_dir).is_dir():
+                err_lbl.set_text("Director de download neconfigurat sau inexistent. Verifică Settings.")
+                refresh_btn.props(remove="loading")
+                return
 
-                status_label.set_text(
-                    f"{len(torrents)} torrente · "
-                    f"↓ {_fmt_speed(total_down)}  ↑ {_fmt_speed(total_up)}"
-                )
-                err_label.classes(add="hidden")
+            torrents, top_items = await run.io_bound(_scan, dl_dir)
 
-                rows = []
-                for t in sorted(torrents, key=lambda x: x.addedDate or 0, reverse=True):
-                    pct = round(t.percentDone * 100, 1) if t.percentDone else 0
-                    rows.append({
-                        "id":       t.id,
-                        "name":     t.name or "?",
-                        "status":   t.status or "unknown",
-                        "pct":      pct,
-                        "size":     _fmt_size(t.totalSize),
-                        "down":     _fmt_speed(t.rateDownload or 0),
-                        "up":       _fmt_speed(t.rateUpload or 0),
-                        "ratio":    f"{t.uploadRatio:.2f}" if t.uploadRatio and t.uploadRatio >= 0 else "—",
-                        "hash":     t.hashString or "",
-                    })
+            container.clear()
+            status_lbl.set_text(f"{len(top_items)} intrări  ·  {_fmt_size(sum(s for _, s, _ in top_items))}")
 
-                table_container.clear()
-                if not rows:
-                    with table_container:
-                        ui.label("Niciun torrent activ.").classes("text-gray-400 text-sm")
-                    return
+            if not top_items:
+                with container:
+                    ui.label("Niciun fișier descărcat.").classes("text-gray-400 text-sm")
+                refresh_btn.props(remove="loading")
+                return
 
-                with table_container:
-                    columns = [
-                        {"name": "name",   "label": "Nume",     "field": "name",   "align": "left"},
-                        {"name": "status", "label": "Status",   "field": "status"},
-                        {"name": "pct",    "label": "%",        "field": "pct"},
-                        {"name": "size",   "label": "Mărime",   "field": "size"},
-                        {"name": "down",   "label": "↓",        "field": "down"},
-                        {"name": "up",     "label": "↑",        "field": "up"},
-                        {"name": "ratio",  "label": "Ratio",    "field": "ratio"},
-                        {"name": "actions","label": "",         "field": "id"},
-                    ]
-                    tbl = ui.table(columns=columns, rows=rows, row_key="hash").classes("w-full")
+            with container:
+                for path, size, children in top_items:
+                    t_info = torrents.get(path.name)
 
-                    tbl.add_slot("body-cell-status", """
-                        <q-td :props="props">
-                            <q-badge :color="
-                                props.value === 'downloading' ? 'blue'  :
-                                props.value === 'seeding'     ? 'green' :
-                                props.value === 'stopped'     ? 'grey'  :
-                                props.value === 'checking'    ? 'orange': 'purple'">
-                                {{ props.value }}
-                            </q-badge>
-                        </q-td>
-                    """)
-                    tbl.add_slot("body-cell-pct", """
-                        <q-td :props="props">
-                            <div class="flex items-center gap-2">
-                                <q-linear-progress
-                                    :value="props.value / 100"
-                                    :color="props.value === 100 ? 'green' : 'blue'"
-                                    class="w-16" rounded />
-                                <span class="text-xs">{{ props.value }}%</span>
-                            </div>
-                        </q-td>
-                    """)
-                    tbl.add_slot("body-cell-actions", """
-                        <q-td :props="props">
-                            <q-btn flat dense
-                                :icon="props.row.status === 'stopped' ? 'play_arrow' : 'pause'"
-                                :color="props.row.status === 'stopped' ? 'green' : 'orange'"
-                                @click="$parent.$emit('toggle', props.row)" />
-                            <q-btn flat dense icon="delete" color="red"
-                                @click="$parent.$emit('remove', props.row)" />
-                        </q-td>
-                    """)
+                    with ui.card().classes("w-full"):
+                        # header card — numele, size, status Transmission, butoane
+                        with ui.row().classes("w-full items-center gap-3 px-1"):
+                            icon = "folder" if path.is_dir() else "movie"
+                            ui.icon(icon, color="yellow" if path.is_dir() else "primary").classes("shrink-0")
+                            ui.label(path.name).classes("flex-1 font-medium text-sm truncate")
+                            ui.label(_fmt_size(size)).classes("text-xs text-gray-400 shrink-0")
+                            if t_info:
+                                _status_badge(t_info)
 
-                    async def handle_toggle(e):
-                        tid = e.args["id"]
-                        status = e.args["status"]
-                        def _do():
-                            c = _connect_transmission()
-                            if status == "stopped":
-                                c.start_torrent(tid)
-                            else:
-                                c.stop_torrent(tid)
-                        await run.io_bound(_do)
-                        await refresh()
+                            async def do_delete(p=path, ti=t_info):
+                                def _del():
+                                    if ti:
+                                        _delete_torrent(ti["id"], delete_data=False)
+                                    _delete_path(p)
+                                await run.io_bound(_del)
+                                ui.notify("Șters", type="warning")
+                                await refresh()
 
-                    async def handle_remove(e):
-                        tid = e.args["id"]
-                        await run.io_bound(lambda: _connect_transmission().remove_torrent(tid, delete_data=False))
-                        ui.notify("Torrent eliminat (fișierele rămân)", type="warning")
-                        await refresh()
+                            ui.button(icon="delete", on_click=do_delete).props(
+                                "flat dense round color=red"
+                            ).tooltip("Șterge fișiere + elimină din Transmission")
 
-                    tbl.on("toggle", handle_toggle)
-                    tbl.on("remove", handle_remove)
+                        ui.separator().classes("my-1")
 
-            except Exception as ex:
-                err_label.set_text(f"Transmission offline: {ex}")
-                err_label.classes(remove="hidden")
+                        # conținut: folder tree sau fișier direct
+                        if path.is_dir():
+                            children_sorted = sorted(
+                                path.iterdir(),
+                                key=lambda p: (p.is_file(), p.name.lower())
+                            )
+                            for child in children_sorted:
+                                if child.is_dir():
+                                    _render_dir(child, dl_dir)
+                                else:
+                                    _render_file(child, dl_dir)
+                        else:
+                            _render_file(path, dl_dir)
 
+            refresh_btn.props(remove="loading")
+
+        refresh_btn.on("click", refresh)
         ui.timer(0.1, refresh, once=True)
-        ui.timer(15, refresh)
+
+
+def _scan(dl_dir: str) -> tuple[dict, list]:
+    """Pure I/O: scan filesystem + fetch Transmission. Returns (torrents_dict, top_items)."""
+    torrents = _fetch_transmission()
+    root = Path(dl_dir)
+    top_items = []
+    for p in sorted(root.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
+        if p.name.startswith("."):
+            continue
+        size = _dir_size(p) if p.is_dir() else p.stat().st_size
+        top_items.append((p, size, []))
+    return torrents, top_items

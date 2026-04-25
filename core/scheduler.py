@@ -6,109 +6,147 @@ from apscheduler.triggers.interval import IntervalTrigger
 log = logging.getLogger(__name__)
 scheduler = BlockingScheduler()
 
+_TASK_GAP_SECONDS = 120   # pauză minimă între două task-uri consecutive
+_last_task_end: datetime | None = None
 
-def _get_flaresolverr_url() -> str | None:
-    from core.db import Session, Setting
+
+
+def _rotate_logs():
+    """Șterge loguri mai vechi de 7 zile."""
+    from core.db import Session, WatchlistLog
+    cutoff = datetime.utcnow() - timedelta(days=7)
     with Session() as s:
-        row = s.query(Setting).filter_by(key="flaresolverr_url").first()
-        return row.value if row and row.value else None
+        deleted = s.query(WatchlistLog).filter(WatchlistLog.ran_at < cutoff).delete()
+        s.commit()
+    if deleted:
+        log.info("[log-rotate] %s rânduri șterse", deleted)
 
 
-def _poll_feeds():
-    from core.db import Session, Feed
-    from core.rules_engine import process_item
+def _poll_watchlist_entries():
+    """Verifică fiecare entry watchlist activ și rulează cel mai vechi scadent.
+    Impune o pauză de _TASK_GAP_SECONDS între task-uri consecutive."""
+    global _last_task_end
 
-    with Session() as s:
-        feeds = s.query(Feed).filter_by(is_active=True).all()
-        feed_data = [
-            {
-                "id": f.id,
-                "name": f.name,
-                "url": f.url,
-                "source_type": f.source_type or "rss",
-                "indexer_id": f.indexer_id,
-                "categories": f.categories,
-                "poll_interval_minutes": f.poll_interval_minutes or 60,
-                "last_checked_at": f.last_checked_at,
-            }
-            for f in feeds
-        ]
+    from core.db import Session, Watchlist
+    from core.rules_engine import run_watchlist_entry_now
+    from core.instance import ensure_instance
 
-    now = datetime.utcnow()
-    flaresolverr = _get_flaresolverr_url()
+    ensure_instance()  # update last_seen_at
 
-    for feed in feed_data:
-        last = feed["last_checked_at"]
-        if last and (now - last) < timedelta(minutes=feed["poll_interval_minutes"]):
-            continue
-
-        try:
-            if feed["source_type"] == "rss":
-                _poll_rss(feed)
-            elif feed["source_type"] == "scraper":
-                _poll_scraper(feed, flaresolverr)
-
-            with Session() as s:
-                from core.db import Feed as FeedModel
-                row = s.query(FeedModel).filter_by(id=feed["id"]).first()
-                if row:
-                    row.last_checked_at = now
-                    s.commit()
-
-        except Exception as e:
-            log.warning("[%s] eroare: %s", feed["name"], e)
-
-
-def _poll_rss(feed: dict):
-    from core.rss_parser import fetch_feed
-    from core.rules_engine import process_item
-
-    items = fetch_feed(feed["url"])
-    cats = feed.get("categories") or []
-    if cats:
-        items = [i for i in items if i.get("category") in cats]
-
-    actions = []
-    for item in items:
-        actions += process_item(item, feed["id"])
-
-    if actions:
-        log.info("[%s] %s", feed["name"], " | ".join(actions))
-
-
-def _poll_scraper(feed: dict, flaresolverr_url: str | None):
-    from core.scrapers import get_scraper
-    from core.rules_engine import process_item
-
-    scraper = get_scraper(feed["indexer_id"])
-    if not scraper:
-        log.warning("[%s] scraper necunoscut: %s", feed["name"], feed["indexer_id"])
+    # Respectă pauza minimă între task-uri
+    if _last_task_end and (datetime.utcnow() - _last_task_end).total_seconds() < _TASK_GAP_SECONDS:
         return
 
-    cats = feed.get("categories") or []
-    items = scraper.fetch_latest(
-        categories=cats if cats else None,
-        flaresolverr_url=flaresolverr_url,
-    )
+    now = datetime.utcnow()
+    with Session() as s:
+        entries = s.query(Watchlist).filter_by(is_active=True).all()
+        due = []
+        for e in entries:
+            interval = e.check_interval_minutes or 120
+            if not e.last_run_at or (now - e.last_run_at) >= timedelta(minutes=interval):
+                # sortăm după last_run_at: cele mai vechi primele
+                due.append((e.id, e.name, e.last_run_at or datetime.min))
 
-    actions = []
-    for item in items:
-        # magnet_getter: called only when a rule matches, avoids fetching detail pages upfront
-        item["_magnet_getter"] = lambda url=item["url"]: scraper.get_magnet(
-            url, flaresolverr_url=flaresolverr_url
+    # Rulează un singur task per tick — cel mai demult nerunat
+    if not due:
+        return
+
+    due.sort(key=lambda x: x[2])
+    eid, ename, _ = due[0]
+    try:
+        result = run_watchlist_entry_now(eid)
+        log.info("[WL:%s] %s", ename, result)
+    except Exception as ex:
+        log.warning("[WL:%s] eroare: %s", ename, ex)
+    finally:
+        _last_task_end = datetime.utcnow()
+
+
+def _check_disk_space():
+    """Eliberează spațiu dacă disk_cleanup_enabled și spațiul liber < disk_min_free_gb.
+    Șterge cele mai vechi torrente (din Transmission + fișiere) până când
+    spațiul liber atinge disk_target_free_gb."""
+    import shutil
+    from core.db import Session, Instance
+    from core.config import INSTANCE_ID
+
+    with Session() as s:
+        inst = s.query(Instance).filter_by(id=INSTANCE_ID).first()
+        if not inst or not inst.disk_cleanup_enabled:
+            return
+        dl_dir     = inst.download_dir or ""
+        min_free   = (inst.disk_min_free_gb or 10) * 1024 ** 3
+        target_free = (inst.disk_target_free_gb or 20) * 1024 ** 3
+
+    if not dl_dir:
+        return
+
+    usage = shutil.disk_usage(dl_dir)
+    if usage.free >= min_free:
+        return
+
+    log.info("[disk] Spațiu liber: %.1f GB < prag %.1f GB — declanșez curățare",
+             usage.free / 1024**3, min_free / 1024**3)
+
+    try:
+        from transmission_rpc import Client
+        from core.instance import get_instance
+        inst_cfg = get_instance()
+        client = Client(
+            host=inst_cfg["transmission_host"],
+            port=inst_cfg["transmission_port"],
+            username=inst_cfg["transmission_user"],
+            password=inst_cfg["transmission_pass"],
         )
-        actions += process_item(item, feed["id"])
+        torrents = client.get_torrents()
+    except Exception as ex:
+        log.warning("[disk] Nu pot conecta la Transmission: %s", ex)
+        return
 
-    if actions:
-        log.info("[%s] %s", feed["name"], " | ".join(actions))
+    # Sortează după doneDate (cel mai vechi completat primul); finished/seeding
+    def _done_ts(t):
+        try:
+            return t.doneDate or 0
+        except Exception:
+            return 0
+
+    candidates = [t for t in torrents if t.status in ("seeding", "stopped")]
+    candidates.sort(key=_done_ts)
+
+    freed = 0
+    for t in candidates:
+        usage = shutil.disk_usage(dl_dir)
+        if usage.free >= target_free:
+            break
+        size = (t.totalSize or 0)
+        try:
+            client.remove_torrent(t.id, delete_data=True)
+            freed += size
+            log.info("[disk] Șters torrent '%s' (%.1f GB)", t.name, size / 1024**3)
+        except Exception as ex:
+            log.warning("[disk] Eroare la ștergere '%s': %s", t.name, ex)
+
+    log.info("[disk] Curățare finalizată — eliberat ~%.1f GB", freed / 1024**3)
 
 
 def start_scheduler():
     scheduler.add_job(
-        _poll_feeds,
-        trigger=IntervalTrigger(minutes=5),
-        id="poll_feeds",
+        _poll_watchlist_entries,
+        trigger=IntervalTrigger(minutes=1),
+        id="poll_watchlist",
         replace_existing=True,
     )
-    log.info("Scheduler pornit — poll la fiecare 5 minute")
+    scheduler.add_job(
+        _rotate_logs,
+        trigger=IntervalTrigger(hours=24),
+        id="rotate_logs",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _check_disk_space,
+        trigger=IntervalTrigger(minutes=30),
+        id="disk_cleanup",
+        replace_existing=True,
+    )
+    log.info("Scheduler pornit")
     scheduler.start()

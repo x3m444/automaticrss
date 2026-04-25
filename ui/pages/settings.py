@@ -1,20 +1,25 @@
 import os
-from nicegui import ui
+from nicegui import ui, run
 from ui.layout import navbar
-from core.db import Session, Setting
+from core.db import Session, Setting, Instance
+from core.config import INSTANCE_ID
 
 
-def _get(s, key, default=""):
+def _get_setting(s, key, default=""):
     row = s.query(Setting).filter_by(key=key).first()
     return row.value if row else default
 
 
-def _set(s, key, value):
+def _set_setting(s, key, value):
     row = s.query(Setting).filter_by(key=key).first()
     if row:
         row.value = value
     else:
         s.add(Setting(key=key, value=value))
+
+
+def _get_instance(s) -> Instance | None:
+    return s.query(Instance).filter_by(id=INSTANCE_ID).first()
 
 
 def _test_write(path: str) -> tuple[bool, str]:
@@ -34,40 +39,48 @@ def _test_write(path: str) -> tuple[bool, str]:
 @ui.page("/settings")
 def settings_page():
     navbar()
+
     with ui.column().classes("w-full p-6 gap-6"):
         ui.label("Setări").classes("text-2xl font-bold")
 
-        # ── Transmission ────────────────────────────────────────────────
+        # ── Această mașină ───────────────────────────────────────────────
         with ui.card().classes("w-full max-w-xl gap-2"):
-            ui.label("Transmission").classes("text-lg font-semibold")
-            # În Docker Compose hostul e "transmission" (numele serviciului), nu "localhost"
-            _default_host = os.getenv("TRANSMISSION_HOST", "localhost")
-            _default_port = os.getenv("TRANSMISSION_PORT", "9091")
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Această mașină").classes("text-lg font-semibold")
+                ui.badge(f"ID: {INSTANCE_ID[:8]}…", color="grey").props("outline")
+
+            ui.label(
+                "Setările de mai jos sunt locale — se aplică doar pe această mașină."
+            ).classes("text-xs text-gray-400")
 
             with Session() as s:
-                host_val = _get(s, "transmission_host", _default_host)
-                port_val = _get(s, "transmission_port", _default_port)
-                user_val = _get(s, "transmission_user", "")
-                pass_val = _get(s, "transmission_pass", "")
-                dir_val  = _get(s, "transmission_download_dir", "")
+                inst = _get_instance(s)
+                inst_name = inst.name if inst else os.environ.get("COMPUTERNAME", "Default")
+                tr_host   = inst.transmission_host if inst else "localhost"
+                tr_port   = str(inst.transmission_port) if inst else "9091"
+                tr_user   = inst.transmission_user if inst else ""
+                tr_pass   = inst.transmission_pass if inst else ""
+                tr_dir    = inst.download_dir if inst else ""
 
-            host = ui.input("Host", value=host_val).classes("w-full")
-            port = ui.input("Port", value=port_val).classes("w-full")
-            user = ui.input("Username", value=user_val).classes("w-full")
-            pwd  = ui.input("Password", value=pass_val, password=True).classes("w-full")
+            name_inp = ui.input("Nume mașină", value=inst_name).classes("w-full")
+            ui.separator()
+            ui.label("Transmission").classes("text-sm font-medium text-gray-500")
+
+            host = ui.input("Host", value=tr_host).classes("w-full")
+            port = ui.input("Port", value=tr_port).classes("w-full")
+            user = ui.input("Username", value=tr_user).classes("w-full")
+            pwd  = ui.input("Password", value=tr_pass, password=True).classes("w-full")
 
             ui.separator()
-
-            ui.label("Director de descărcare").classes("text-sm font-medium text-gray-600")
+            ui.label("Director de descărcare").classes("text-sm font-medium text-gray-500")
             with ui.row().classes("w-full items-center gap-2"):
-                download_dir = ui.input("Cale director", value=dir_val).classes("flex-1")
-                ui.button("Test scriere", on_click=lambda: on_test_write()).props("outline dense")
+                download_dir = ui.input("Cale director", value=tr_dir).classes("flex-1")
+                ui.button("Test scriere", on_click=lambda: _on_test_write()).props("outline dense")
 
-            dir_status = ui.label("").classes("text-sm")
-
+            dir_status  = ui.label("").classes("text-sm")
             conn_status = ui.label("").classes("text-sm mt-1")
 
-            def on_test_write():
+            def _on_test_write():
                 path = download_dir.value.strip()
                 if not path:
                     dir_status.set_text("✘ Introdu o cale")
@@ -77,34 +90,48 @@ def settings_page():
                 dir_status.set_text(msg)
                 dir_status.classes(replace=f"text-sm {'text-green-600' if ok else 'text-red-600'}")
 
-            def save():
-                with Session() as s:
-                    for key, inp in [
-                        ("transmission_host", host),
-                        ("transmission_port", port),
-                        ("transmission_user", user),
-                        ("transmission_pass", pwd),
-                        ("transmission_download_dir", download_dir),
-                    ]:
-                        _set(s, key, inp.value)
-                    s.commit()
-                ui.notify("Salvat", type="positive")
-
             def _connect():
                 from transmission_rpc import Client
                 return Client(
-                    host=host.value, port=int(port.value),
+                    host=host.value, port=int(port.value or "9091"),
                     username=user.value, password=pwd.value,
                 )
 
-            def _apply_session(session, torrents_count):
+            def _apply_session(session, count):
                 download_dir.set_value(session.download_dir)
-                dir_status.set_text("Director citit din Transmission — apasă Test scriere pentru a verifica.")
+                dir_status.set_text("Director citit din Transmission — apasă Test scriere pentru verificare.")
                 dir_status.classes(replace="text-sm text-blue-500")
-                conn_status.set_text(f"✔ Conectat — {host.value}:{port.value} · v{session.version} · {torrents_count} torrent(e)")
+                conn_status.set_text(
+                    f"✔ Conectat — {host.value}:{port.value} · v{session.version} · {count} torrent(e)"
+                )
                 conn_status.classes(replace="text-sm text-green-600")
 
-            def test():
+            def save_instance():
+                from datetime import datetime
+                with Session() as s:
+                    inst = _get_instance(s)
+                    if inst:
+                        inst.name              = name_inp.value.strip() or inst.name
+                        inst.transmission_host = host.value.strip()
+                        inst.transmission_port = int(port.value or "9091")
+                        inst.transmission_user = user.value.strip()
+                        inst.transmission_pass = pwd.value
+                        inst.download_dir      = download_dir.value.strip() or None
+                    else:
+                        from core.instance import ensure_instance as _ei
+                        _ei()
+                        inst = _get_instance(s)
+                        if inst:
+                            inst.name              = name_inp.value.strip()
+                            inst.transmission_host = host.value.strip()
+                            inst.transmission_port = int(port.value or "9091")
+                            inst.transmission_user = user.value.strip()
+                            inst.transmission_pass = pwd.value
+                            inst.download_dir      = download_dir.value.strip() or None
+                    s.commit()
+                ui.notify("✓ Salvat", type="positive")
+
+            def test_connection():
                 conn_status.set_text("Se testează...")
                 conn_status.classes(replace="text-sm text-gray-500")
                 try:
@@ -116,39 +143,127 @@ def settings_page():
                     conn_status.classes(replace="text-sm text-red-600")
 
             with ui.row().classes("gap-2 mt-3"):
-                ui.button("Salvează", on_click=save)
-                ui.button("Testează conexiunea", on_click=test).props("outline")
+                ui.button("Salvează", on_click=save_instance).props("color=primary")
+                ui.button("Testează conexiunea", on_click=test_connection).props("outline")
 
-        # ── FlareSolverr ─────────────────────────────────────────────────
+            if not tr_dir:
+                async def _auto_populate():
+                    try:
+                        def _fetch():
+                            c = _connect()
+                            return c.get_session(), len(c.get_torrents())
+                        session, count = await run.io_bound(_fetch)
+                        _apply_session(session, count)
+                    except Exception:
+                        pass
+                ui.timer(0.1, _auto_populate, once=True)
+
+        # ── Disk Management ──────────────────────────────────────────────
         with ui.card().classes("w-full max-w-xl gap-2"):
-            with ui.row().classes("w-full justify-between items-center"):
-                ui.label("FlareSolverr").classes("text-lg font-semibold")
-                ui.badge("opțional").props("outline color=grey")
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Disk Management").classes("text-lg font-semibold")
+                ui.badge("per-mașină", color="grey").props("outline")
 
             ui.label(
-                "Dacă indexerii sunt protejați de Cloudflare, FlareSolverr rezolvă challenge-ul. "
-                "Lasă gol dacă nu îl folosești."
+                "Dacă spațiul liber scade sub pragul minim, se șterg automat torrentele "
+                "completate (cele mai vechi primele) până se atinge spațiul țintă."
             ).classes("text-xs text-gray-400")
 
-            _default_fs = os.getenv("FLARESOLVERR_URL", "")
             with Session() as s:
-                fs_url_val = _get(s, "flaresolverr_url", _default_fs)
+                inst_dm = _get_instance(s)
+                dm_enabled = inst_dm.disk_cleanup_enabled if inst_dm else False
+                dm_min     = inst_dm.disk_min_free_gb    if inst_dm else 10
+                dm_target  = inst_dm.disk_target_free_gb if inst_dm else 20
 
-            fs_url = ui.input("URL FlareSolverr", value=fs_url_val, placeholder="http://localhost:8191").classes("w-full")
-            fs_status = ui.label("").classes("text-sm mt-1")
+            dm_toggle = ui.switch("Activează curățare automată", value=dm_enabled)
+            with ui.row().classes("w-full items-center gap-4"):
+                dm_min_inp    = ui.number("Spațiu minim liber (GB)",  value=dm_min,    min=1, step=1).classes("flex-1")
+                dm_target_inp = ui.number("Spațiu țintă eliberat (GB)", value=dm_target, min=1, step=1).classes("flex-1")
 
-            def save_fs():
+            disk_status = ui.label("").classes("text-sm mt-1")
+
+            def save_disk():
                 with Session() as s:
-                    _set(s, "flaresolverr_url", fs_url.value.rstrip("/"))
+                    inst = _get_instance(s)
+                    if inst:
+                        inst.disk_cleanup_enabled = dm_toggle.value
+                        inst.disk_min_free_gb     = int(dm_min_inp.value or 10)
+                        inst.disk_target_free_gb  = int(dm_target_inp.value or 20)
+                        s.commit()
+                ui.notify("✓ Disk management salvat", type="positive")
+
+            def check_now():
+                import shutil
+                path = ""
+                with Session() as s:
+                    inst = _get_instance(s)
+                    if inst:
+                        path = inst.download_dir or ""
+                if not path:
+                    disk_status.set_text("✘ Director de descărcare neconfigurat")
+                    disk_status.classes(replace="text-sm text-red-600")
+                    return
+                try:
+                    usage = shutil.disk_usage(path)
+                    free_gb  = usage.free  / 1024**3
+                    total_gb = usage.total / 1024**3
+                    used_pct = (usage.used / usage.total) * 100
+                    disk_status.set_text(
+                        f"Liber: {free_gb:.1f} GB / {total_gb:.1f} GB  ({used_pct:.0f}% folosit)"
+                    )
+                    disk_status.classes(replace="text-sm text-green-600")
+                except Exception as e:
+                    disk_status.set_text(f"✘ {e}")
+                    disk_status.classes(replace="text-sm text-red-600")
+
+            with ui.row().classes("gap-2 mt-3"):
+                ui.button("Salvează", on_click=save_disk).props("color=primary")
+                ui.button("Verifică spațiu acum", on_click=check_now).props("outline")
+
+        # ── Setări globale (shared între toate mașinile) ─────────────────
+        with ui.card().classes("w-full max-w-xl gap-2"):
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Global").classes("text-lg font-semibold")
+                ui.badge("shared — toate mașinile", color="blue").props("outline")
+
+            ui.label(
+                "Aceste setări se aplică pe toate mașinile care folosesc aceeași bază de date."
+            ).classes("text-xs text-gray-400")
+
+            # FlareSolverr
+            ui.label("FlareSolverr").classes("text-sm font-medium text-gray-500 mt-2")
+            with Session() as s:
+                fs_url_val = _get_setting(s, "flaresolverr_url", os.getenv("FLARESOLVERR_URL", ""))
+
+            fs_url    = ui.input("URL FlareSolverr", value=fs_url_val,
+                                 placeholder="http://localhost:8191").classes("w-full")
+            fs_status = ui.label("").classes("text-sm")
+
+            # Jackett
+            ui.separator()
+            ui.label("Jackett").classes("text-sm font-medium text-gray-500")
+            with Session() as s:
+                jackett_url_val = _get_setting(s, "jackett_url", os.getenv("JACKETT_URL", "http://localhost:9117"))
+                jackett_key_val = _get_setting(s, "jackett_api_key", "")
+
+            jackett_url    = ui.input("URL Jackett", value=jackett_url_val).classes("w-full")
+            jackett_key    = ui.input("API Key",     value=jackett_key_val).classes("w-full")
+            jackett_status = ui.label("").classes("text-sm")
+
+            def save_global():
+                with Session() as s:
+                    _set_setting(s, "flaresolverr_url", fs_url.value.rstrip("/"))
+                    _set_setting(s, "jackett_url",      jackett_url.value.rstrip("/"))
+                    _set_setting(s, "jackett_api_key",  jackett_key.value.strip())
                     s.commit()
-                ui.notify("FlareSolverr salvat", type="positive")
+                ui.notify("✓ Salvat global", type="positive")
 
             def test_fs():
-                import httpx as _httpx
+                import httpx
                 fs_status.set_text("Se testează...")
                 fs_status.classes(replace="text-sm text-gray-500")
                 try:
-                    r = _httpx.get(f"{fs_url.value.rstrip('/')}/health", timeout=5)
+                    r = httpx.get(f"{fs_url.value.rstrip('/')}/health", timeout=5)
                     if r.status_code == 200:
                         fs_status.set_text("✔ FlareSolverr online")
                         fs_status.classes(replace="text-sm text-green-600")
@@ -159,69 +274,36 @@ def settings_page():
                     fs_status.set_text(f"✘ {e}")
                     fs_status.classes(replace="text-sm text-red-600")
 
-            with ui.row().classes("gap-2 mt-2"):
-                ui.button("Salvează", on_click=save_fs)
-                ui.button("Testează conexiunea", on_click=test_fs).props("outline")
-
-        # ── Jackett ──────────────────────────────────────────────────────
-        with ui.card().classes("w-full max-w-xl gap-2"):
-            with ui.row().classes("w-full justify-between items-center"):
-                ui.label("Jackett").classes("text-lg font-semibold")
-                ui.badge("opțional").props("outline color=grey")
-
-            ui.label(
-                "Dacă Jackett rulează (local sau în Docker), îl poți folosi ca sursă "
-                "alternativă pentru indexeri. API key-ul îl găsești în interfața Jackett."
-            ).classes("text-xs text-gray-400")
-
-            _default_jackett = os.getenv("JACKETT_URL", "http://localhost:9117")
-            with Session() as s:
-                jackett_url_val = _get(s, "jackett_url", _default_jackett)
-                jackett_key_val = _get(s, "jackett_api_key", "")
-
-            jackett_url = ui.input("URL Jackett", value=jackett_url_val).classes("w-full")
-            jackett_key = ui.input("API Key", value=jackett_key_val).classes("w-full")
-
-            jackett_status = ui.label("").classes("text-sm mt-1")
-
-            def save_jackett():
-                with Session() as s:
-                    _set(s, "jackett_url", jackett_url.value.rstrip("/"))
-                    _set(s, "jackett_api_key", jackett_key.value.strip())
-                    s.commit()
-                ui.notify("Jackett salvat", type="positive")
-
             def test_jackett():
                 import httpx
                 jackett_status.set_text("Se testează...")
                 jackett_status.classes(replace="text-sm text-gray-500")
                 try:
-                    url = f"{jackett_url.value.rstrip('/')}/api/v2.0/server/config"
-                    params = {"apikey": jackett_key.value.strip()}
-                    r = httpx.get(url, params=params, timeout=5)
+                    r = httpx.get(
+                        f"{jackett_url.value.rstrip('/')}/api/v2.0/server/config",
+                        params={"apikey": jackett_key.value.strip()}, timeout=5
+                    )
                     if r.status_code == 200:
-                        data = r.json()
-                        version = data.get("version", "?")
-                        jackett_status.set_text(f"✔ Jackett v{version} — conectat")
+                        v = r.json().get("version", "?")
+                        jackett_status.set_text(f"✔ Jackett v{v} — conectat")
                         jackett_status.classes(replace="text-sm text-green-600")
                     else:
-                        jackett_status.set_text(f"✘ HTTP {r.status_code} — verifică URL și API key")
+                        jackett_status.set_text(f"✘ HTTP {r.status_code}")
                         jackett_status.classes(replace="text-sm text-red-600")
                 except Exception as e:
                     jackett_status.set_text(f"✘ {e}")
                     jackett_status.classes(replace="text-sm text-red-600")
 
-            with ui.row().classes("gap-2 mt-2"):
-                ui.button("Salvează", on_click=save_jackett)
-                ui.button("Testează conexiunea", on_click=test_jackett).props("outline")
+            with ui.row().classes("gap-2 mt-3"):
+                ui.button("Salvează global", on_click=save_global).props("color=primary")
+                ui.button("Test FlareSolverr", on_click=test_fs).props("outline")
+                ui.button("Test Jackett", on_click=test_jackett).props("outline")
 
         # ── Conexiuni sistem ─────────────────────────────────────────────
         with ui.card().classes("w-full max-w-xl gap-2"):
             ui.label("Conexiuni sistem").classes("text-lg font-semibold")
-            ui.label("Testează manual conexiunile la pornire sau după modificări.").classes("text-xs text-gray-400")
-
             db_status = ui.label("").classes("text-sm")
-            tr_status2 = ui.label("").classes("text-sm")
+            tr_status = ui.label("").classes("text-sm")
 
             def test_db():
                 db_status.set_text("Se testează...")
@@ -236,18 +318,18 @@ def settings_page():
                     db_status.set_text(f"✘ DB: {e}")
                     db_status.classes(replace="text-sm text-red-600")
 
-            def test_tr2():
-                tr_status2.set_text("Se testează...")
-                tr_status2.classes(replace="text-sm text-gray-500")
+            def test_tr():
+                tr_status.set_text("Se testează...")
+                tr_status.classes(replace="text-sm text-gray-500")
                 try:
                     c = _connect()
-                    session = c.get_session()
-                    tr_status2.set_text(f"✔ Transmission — conectat (v{session.version})")
-                    tr_status2.classes(replace="text-sm text-green-600")
+                    s = c.get_session()
+                    tr_status.set_text(f"✔ Transmission v{s.version} — conectat")
+                    tr_status.classes(replace="text-sm text-green-600")
                 except Exception as e:
-                    tr_status2.set_text(f"✘ Transmission: {e}")
-                    tr_status2.classes(replace="text-sm text-red-600")
+                    tr_status.set_text(f"✘ {e}")
+                    tr_status.classes(replace="text-sm text-red-600")
 
             with ui.row().classes("gap-2"):
-                ui.button("Test DB", on_click=test_db).props("outline")
-                ui.button("Test Transmission", on_click=test_tr2).props("outline")
+                ui.button("Test DB",          on_click=test_db).props("outline")
+                ui.button("Test Transmission", on_click=test_tr).props("outline")

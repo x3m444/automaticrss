@@ -152,10 +152,10 @@ def search_page():
                     ui.label("Sugestii:").classes("text-xs text-gray-400 mt-1")
                     with ui.row().classes("flex-wrap gap-2"):
                         for sd in subdirs:
-                            ui.chip(
-                                sd, clickable=True,
+                            ui.button(
+                                sd,
                                 on_click=lambda s=sd: subdir_input.set_value(s),
-                            ).props("dense outline")
+                            ).props("flat dense outline rounded").classes("text-xs")
 
                 ui.separator()
 
@@ -163,15 +163,22 @@ def search_page():
                     ui.button("Anulează", on_click=dlg.close).props("flat")
 
                     async def do_download():
-                        subdir = subdir_input.value.strip() or None
-                        dl_btn.props("loading")
-                        ok, msg = await run.io_bound(_send_download_sync, item, subdir)
-                        dl_btn.props(remove="loading")
-                        dlg.close()
-                        if ok:
-                            ui.notify(f"✓ Trimis → {msg}", type="positive", timeout=4000)
-                        else:
-                            ui.notify(f"Eroare: {msg}", type="negative", timeout=6000)
+                        try:
+                            subdir = subdir_input.value.strip() or None
+                            dl_btn.props(add="loading")
+                            ok, msg = await run.io_bound(_send_download_sync, item, subdir)
+                            dl_btn.props(remove="loading")
+                            dlg.close()
+                            if ok:
+                                ui.notify(f"✓ Trimis → {msg}", type="positive", timeout=4000)
+                            else:
+                                ui.notify(f"Eroare: {msg}", type="negative", timeout=6000)
+                        except Exception as ex:
+                            try:
+                                dl_btn.props(remove="loading")
+                            except Exception:
+                                pass
+                            ui.notify(f"Eroare neașteptată: {ex}", type="negative", timeout=8000)
 
                     dl_btn = ui.button(
                         "Descarcă", icon="download",
@@ -186,64 +193,38 @@ def search_page():
             if not results:
                 return
 
+            shown = sorted(results, key=lambda x: x.get("seeders", 0) or 0, reverse=True)[:50]
+
             with results_container:
-                ui.label(f"{len(results)} rezultate").classes("text-sm text-gray-400")
+                suffix = " (top 50 după seederi)" if len(results) > 50 else ""
+                ui.label(f"{len(results)} rezultate{suffix}").classes("text-sm text-gray-400")
 
-                cols = [
-                    {"name": "source",   "label": "Sursă",   "field": "source",   "align": "left", "sortable": True},
-                    {"name": "title",    "label": "Titlu",    "field": "title",    "align": "left", "sortable": True},
-                    {"name": "size",     "label": "Mărime",   "field": "size",     "sortable": True},
-                    {"name": "seeders",  "label": "Seederi",  "field": "seeders",  "sortable": True},
-                    {"name": "leechers", "label": "Leechers", "field": "leechers", "sortable": True},
-                    {"name": "actions",  "label": "",         "field": "idx"},
-                ]
+                with ui.element("div").classes("w-full border border-gray-700 rounded overflow-hidden mt-2"):
+                    with ui.row().classes("w-full items-center px-3 py-2 bg-gray-800 text-xs font-bold text-gray-400 gap-2"):
+                        ui.label("Sursă").classes("w-28 shrink-0")
+                        ui.label("Titlu").classes("flex-1")
+                        ui.label("Mărime").classes("w-24 shrink-0")
+                        ui.label("↑ Seed").classes("w-14 shrink-0 text-right")
+                        ui.label("↓ Leech").classes("w-16 shrink-0 text-right")
+                        ui.label("").classes("w-10 shrink-0")
 
-                rows = [
-                    {
-                        "idx":      i,
-                        "source":   r.get("source", ""),
-                        "title":    r.get("title", ""),
-                        "size":     r.get("size", ""),
-                        "seeders":  r.get("seeders", 0),
-                        "leechers": r.get("leechers", 0),
-                    }
-                    for i, r in enumerate(results)
-                ]
-
-                tbl = ui.table(
-                    columns=cols, rows=rows, row_key="idx",
-                    pagination={"rowsPerPage": 25, "sortBy": "seeders", "descending": True},
-                ).classes("w-full")
-                tbl.props("dense")
-
-                tbl.add_slot("body-cell-source", """
-                    <q-td :props="props">
-                        <q-badge color="purple" outline>{{ props.value }}</q-badge>
-                    </q-td>
-                """)
-                tbl.add_slot("body-cell-title", """
-                    <q-td :props="props"
-                          style="max-width:420px;white-space:normal;word-break:break-word">
-                        {{ props.value }}
-                    </q-td>
-                """)
-                tbl.add_slot("body-cell-seeders", """
-                    <q-td :props="props">
-                        <span :style="{color: props.value > 0 ? '#4caf50' : '#9e9e9e'}">
-                            {{ props.value }}
-                        </span>
-                    </q-td>
-                """)
-                tbl.add_slot("body-cell-actions", """
-                    <q-td :props="props">
-                        <q-btn flat dense icon="download" color="primary"
-                            @click="$parent.$emit('dl', props.row)" />
-                    </q-td>
-                """)
-
-                tbl.on("dl", lambda e: _show_download_dialog(
-                    state["results"][int(e.args["idx"])]
-                ))
+                    for r in shown:
+                        seeds = r.get("seeders", 0) or 0
+                        leech = r.get("leechers", 0) or 0
+                        with ui.row().classes("w-full items-center px-3 py-2 border-t border-gray-700 gap-2"):
+                            ui.badge(r.get("source", "—")).props("outline color=purple").classes("w-28 shrink-0")
+                            ui.label(r.get("title", "")).classes("flex-1 text-sm").style(
+                                "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:500px"
+                            )
+                            ui.label(r.get("size", "—")).classes("w-24 shrink-0 text-xs text-gray-400")
+                            ui.label(str(seeds)).classes("w-14 shrink-0 text-xs text-right").style(
+                                f"color: {'#4caf50' if seeds > 0 else '#9e9e9e'}"
+                            )
+                            ui.label(str(leech)).classes("w-16 shrink-0 text-xs text-right text-gray-400")
+                            ui.button(
+                                icon="download",
+                                on_click=lambda item=r: _show_download_dialog(item),
+                            ).props("flat dense round color=primary").classes("w-10 shrink-0")
 
         async def do_search():
             query = query_input.value.strip()

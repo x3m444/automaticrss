@@ -36,15 +36,33 @@ class SeenItem(Base):
     added_at = Column(DateTime, default=datetime.utcnow)
 
 
+class Instance(Base):
+    __tablename__ = "arss_instances"
+
+    id                = Column(String(36), primary_key=True)   # UUID din secrets.toml
+    name              = Column(String(255), nullable=False, default="Default")
+    transmission_host = Column(String(255), default="localhost")
+    transmission_port = Column(Integer, default=9091)
+    transmission_user = Column(String(255), default="")
+    transmission_pass = Column(String(255), default="")
+    download_dir           = Column(String(500), nullable=True)
+    disk_cleanup_enabled   = Column(Boolean, default=False)
+    disk_min_free_gb       = Column(Integer, default=10)
+    disk_target_free_gb    = Column(Integer, default=20)
+    last_seen_at           = Column(DateTime, nullable=True)
+    created_at             = Column(DateTime, default=datetime.utcnow)
+
+
 class Download(Base):
     __tablename__ = "arss_downloads"
 
-    id = Column(Integer, primary_key=True)
-    torrent_hash = Column(String(100), unique=True)
-    title = Column(Text)
-    status = Column(String(50), default="queued")
-    size_bytes = Column(Integer, nullable=True)
-    added_at = Column(DateTime, default=datetime.utcnow)
+    id            = Column(Integer, primary_key=True)
+    instance_id   = Column(String(36), nullable=True)   # nullable: backwards compat
+    torrent_hash  = Column(String(100), unique=True)
+    title         = Column(Text)
+    status        = Column(String(50), default="queued")
+    size_bytes    = Column(Integer, nullable=True)
+    added_at      = Column(DateTime, default=datetime.utcnow)
 
 
 class Setting(Base):
@@ -88,7 +106,25 @@ class Watchlist(Base):
     download_subdir = Column(String(500), nullable=True)
     feed_ids = Column(JSON, default=list)     # [] = toate feed-urile active
     is_active = Column(Boolean, default=True)
+    check_interval_minutes = Column(Integer, default=120)
+    last_run_at = Column(DateTime, nullable=True)
+    log_level = Column(String(20), default="full")  # full | sent | summary
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WatchlistLog(Base):
+    __tablename__ = "arss_wl_logs"
+
+    id = Column(Integer, primary_key=True)
+    watchlist_id = Column(Integer, nullable=True)   # nullable: log survives watchlist deletion
+    watchlist_name = Column(String(255), nullable=False)
+    ran_at = Column(DateTime, default=datetime.utcnow)
+    items_checked = Column(Integer, default=0)
+    items_sent = Column(Integer, default=0)
+    items_blocked = Column(Integer, default=0)
+    # entries: [{title, action: "sent"|"blocked"|"excluded", reason: str|None}]
+    # empty list when log_detail=False
+    entries = Column(JSON, default=list)
 
 
 def init_db():

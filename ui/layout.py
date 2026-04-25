@@ -10,7 +10,6 @@ def navbar():
             ui.link("Feeds",     "/feeds").classes("text-white hover:text-gray-300")
             ui.link("Caută",     "/search").classes("text-white hover:text-gray-300")
             ui.link("Watchlist", "/watchlist").classes("text-white hover:text-gray-300")
-            ui.link("Reguli",    "/rules").classes("text-white hover:text-gray-300")
             ui.link("Downloads", "/downloads").classes("text-white hover:text-gray-300")
             ui.link("Filtre",    "/filters").classes("text-white hover:text-gray-300")
             ui.link("Settings",  "/settings").classes("text-white hover:text-gray-300")

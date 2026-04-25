@@ -1,32 +1,11 @@
 import re
-from core.db import Session, Rule, Watchlist, SeenItem, Download
+from core.db import Session, Watchlist, SeenItem, Download
 from core.filters import apply_global_filters, get_global_filters
 
 
-def _matches_rule(title: str, rule: Rule) -> bool:
-    """
-    must_contain: ALL terms must appear in title (AND).
-    must_not_contain: NONE of these terms may appear (AND NOT).
-    Empty list = no constraint.
-    """
-    t = title.lower()
-    for term in (rule.must_contain or []):
-        if term.lower() not in t:
-            return False
-    for term in (rule.must_not_contain or []):
-        if term.lower() in t:
-            return False
-    return True
-
-
-def _build_merged_filters(rule: Rule, global_filters: dict) -> dict:
-    merged = dict(global_filters)
-    for field in ("size_min_mb", "size_max_gb", "seeders_min",
-                  "quality_banned", "resolution_min", "languages", "title_blacklist"):
-        val = getattr(rule, field, None)
-        if val is not None:
-            merged[field] = val
-    return merged
+def _norm(s: str) -> str:
+    """Normalizează separatorii frecvenți din titluri torrent: punct, underscore, liniuță → spațiu."""
+    return re.sub(r'[._\-]', ' ', s).lower()
 
 
 def _already_seen(guid: str) -> bool:
@@ -44,16 +23,14 @@ def _mark_seen(feed_id: int, guid: str, title: str):
 def _send_to_transmission(item: dict, subdir: str | None) -> bool:
     try:
         from transmission_rpc import Client
-        from core.db import Setting as S
-        with Session() as s:
-            def get(key, default):
-                row = s.query(S).filter_by(key=key).first()
-                return row.value if row else default
-            host     = get("transmission_host", "localhost")
-            port     = int(get("transmission_port", "9091"))
-            user     = get("transmission_user", "")
-            pwd      = get("transmission_pass", "")
-            base_dir = get("transmission_download_dir", "")
+        from core.instance import get_instance
+        from core.config import INSTANCE_ID
+        inst = get_instance()
+        host     = inst["transmission_host"]
+        port     = inst["transmission_port"]
+        user     = inst["transmission_user"]
+        pwd      = inst["transmission_pass"]
+        base_dir = inst["download_dir"]
 
         client = Client(host=host, port=port, username=user, password=pwd)
         download_dir = f"{base_dir.rstrip('/')}/{subdir}" if subdir and base_dir else base_dir or None
@@ -81,6 +58,7 @@ def _send_to_transmission(item: dict, subdir: str | None) -> bool:
         with Session() as s:
             if not s.query(Download).filter_by(torrent_hash=t.hashString).first():
                 s.add(Download(
+                    instance_id=INSTANCE_ID,
                     torrent_hash=t.hashString,
                     title=item.get("title", ""),
                     status="queued",
@@ -104,68 +82,150 @@ def _matches_watchlist_term(title: str, entry: Watchlist) -> str | None:
     return None
 
 
-def process_item(item: dict, feed_id: int) -> list[str]:
+import logging as _logging
+_wl_log = _logging.getLogger("watchlist")
+
+
+def run_watchlist_entry_now(entry_id: int) -> str:
     """
-    Runs a feed item through all active rules and watchlist entries.
-    Returns a list of action strings for logging.
+    Polls all relevant feeds for a specific watchlist entry.
+    Pipeline: read RSS → term match → exclusions → global filters (with rejection log) → Transmission.
+    Updates last_run_at, writes WatchlistLog. Returns a human-readable summary.
     """
-    guid = item.get("guid") or item.get("link") or item.get("title", "")
-    if _already_seen(guid):
-        return []
+    from datetime import datetime as _dt
+    from core.db import Feed, Setting, WatchlistLog
+
+    from core.rss_parser import fetch_feed
+    from core.scrapers import get_scraper
+    from core.filters import get_global_filters, apply_global_filters
+
+    with Session() as s:
+        entry = s.query(Watchlist).filter_by(id=entry_id).first()
+        if not entry:
+            return "Intrare negăsită"
+
+        terms     = [t.lower() for t in (entry.terms or [])]
+        excl      = [e.lower() for e in (entry.exclusions or [])]
+        subdir    = entry.download_subdir
+        name      = entry.name
+        feed_ids  = list(entry.feed_ids or [])
+        log_level = entry.log_level or "full"  # full | sent | summary
+
+        if feed_ids:
+            feeds = s.query(Feed).filter(
+                Feed.id.in_(feed_ids), Feed.is_active == True
+            ).all()
+        else:
+            feeds = s.query(Feed).filter_by(is_active=True).all()
+
+        feed_list = [
+            {"id": f.id, "name": f.name, "url": f.url,
+             "source_type": f.source_type or "rss",
+             "indexer_id": f.indexer_id, "categories": f.categories}
+            for f in feeds
+        ]
+        row = s.query(Setting).filter_by(key="flaresolverr_url").first()
+        flaresolverr = row.value if row and row.value else None
 
     global_filters = get_global_filters()
-    matched_any = False
-    actions = []
+    sent = 0
+    checked = 0
+    blocked = 0
+    log_entries: list[dict] = []
 
-    # ── Rules ────────────────────────────────────────────────────────────
+    for feed in feed_list:
+        try:
+            if feed["source_type"] == "rss":
+                items = fetch_feed(feed["url"])
+                cats = feed.get("categories") or []
+                if cats:
+                    items = [i for i in items if i.get("category") in cats]
+            else:
+                scraper = get_scraper(feed["indexer_id"])
+                if not scraper:
+                    continue
+                cats = feed.get("categories") or []
+                items = scraper.fetch_latest(
+                    categories=cats if cats else None,
+                    flaresolverr_url=flaresolverr,
+                )
+                for item in items:
+                    if not item.get("magnet") and item.get("url"):
+                        item["_magnet_getter"] = lambda url=item["url"]: scraper.get_magnet(
+                            url, flaresolverr_url=flaresolverr
+                        )
+
+            for item in items:
+                checked += 1
+                title = item.get("title", "")
+                guid  = item.get("guid") or item.get("link") or title
+
+                if _already_seen(guid):
+                    continue
+
+                t_norm = _norm(title)
+
+                # Excluderi
+                blocked_by_excl = next((e for e in excl if _norm(e) in t_norm), None)
+                if blocked_by_excl:
+                    _wl_log.debug("[%s] exclus '%s': %s", name, blocked_by_excl, title)
+                    if log_level in ("full", "verbose"):
+                        log_entries.append({"title": title, "action": "excluded", "reason": f'excludere: "{blocked_by_excl}"'})
+                    blocked += 1
+                    continue
+
+                # Potrivire termeni (OR)
+                matched_term = next((t for t in terms if _norm(t) in t_norm), None)
+                if not matched_term:
+                    if log_level == "verbose":
+                        log_entries.append({"title": title, "action": "nomatch", "reason": "fără potrivire"})
+                    continue
+
+                # Filtre globale
+                passed, reason = apply_global_filters(item, global_filters)
+                if not passed:
+                    _wl_log.info("[%s] blocat (%s): %s", name, reason, title)
+                    if log_level in ("full", "verbose"):
+                        log_entries.append({"title": title, "action": "blocked", "reason": reason})
+                    blocked += 1
+                    continue
+
+                ok = _send_to_transmission(item, subdir)
+                if ok:
+                    sent += 1
+                    _mark_seen(feed["id"], guid, title)
+                    _wl_log.info("[%s] ✓ trimis '%s': %s", name, matched_term, title)
+                    if log_level in ("full", "sent", "verbose"):
+                        log_entries.append({"title": title, "action": "sent", "reason": f'termen: "{matched_term}"'})
+                else:
+                    _wl_log.warning("[%s] eroare Transmission: %s", name, title)
+                    if log_level in ("full", "sent", "verbose"):
+                        log_entries.append({"title": title, "action": "error", "reason": "eroare Transmission"})
+
+        except Exception as ex:
+            _wl_log.warning("[%s] eroare feed '%s': %s", name, feed.get("name", "?"), ex)
+
+    now = _dt.utcnow()
     with Session() as s:
-        rules = s.query(Rule).filter_by(is_active=True).all()
+        entry = s.query(Watchlist).filter_by(id=entry_id).first()
+        if entry:
+            entry.last_run_at = now
+            s.commit()
+        s.add(WatchlistLog(
+            watchlist_id=entry_id,
+            watchlist_name=name,
+            ran_at=now,
+            items_checked=checked,
+            items_sent=sent,
+            items_blocked=blocked,
+            entries=log_entries if log_level != "summary" else [],
+        ))
+        s.commit()
 
-    for rule in rules:
-        if rule.feed_ids and feed_id not in rule.feed_ids:
-            continue
-        if not _matches_rule(item.get("title", ""), rule):
-            continue
+    if sent > 0:
+        return f"✓ {sent} torente noi trimise la Transmission"
+    if checked == 0:
+        return "Niciun feed activ disponibil"
+    return f"Niciun rezultat nou ({checked} items verificate)"
 
-        merged = _build_merged_filters(rule, global_filters)
-        passed, reason = apply_global_filters(item, merged)
-        if not passed:
-            actions.append(f"[{rule.name}] blocat: {reason}")
-            continue
 
-        sent = _send_to_transmission(item, rule.download_subdir)
-        if sent:
-            matched_any = True
-            actions.append(f"[{rule.name}] → Transmission ({rule.download_subdir or 'default'})")
-        else:
-            actions.append(f"[{rule.name}] eroare Transmission")
-
-    # ── Watchlist ────────────────────────────────────────────────────────
-    with Session() as s:
-        wl_entries = s.query(Watchlist).filter_by(is_active=True).all()
-
-    for entry in wl_entries:
-        if entry.feed_ids and feed_id not in entry.feed_ids:
-            continue
-
-        matched_term = _matches_watchlist_term(item.get("title", ""), entry)
-        if not matched_term:
-            continue
-
-        passed, _ = apply_global_filters(item, global_filters)
-        if not passed:
-            continue
-
-        sent = _send_to_transmission(item, entry.download_subdir)
-        if sent:
-            matched_any = True
-            actions.append(
-                f"[WL:{entry.name}] \"{matched_term}\" → {entry.download_subdir or 'default'}"
-            )
-        else:
-            actions.append(f"[WL:{entry.name}] eroare Transmission")
-
-    if matched_any:
-        _mark_seen(feed_id, guid, item.get("title", ""))
-
-    return actions
