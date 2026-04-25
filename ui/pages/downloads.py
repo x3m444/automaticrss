@@ -53,10 +53,9 @@ def _dir_size(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
 
-def _fetch_all_transmission() -> tuple[list[dict], dict[str, dict], dict[str, dict]]:
-    """Single Transmission call → (active_list, by_name, by_hash).
-    active_list: torrents not yet complete.
-    by_name/by_hash: all torrents for filesystem matching."""
+def _fetch_all_transmission() -> tuple[list[dict], dict[str, dict], dict[str, dict], dict[str, dict]]:
+    """Single Transmission call → (active_list, by_name, by_hash, by_full_path).
+    by_full_path: {'/absolute/path/to/torrent/name': info} pentru matching robust."""
     try:
         from transmission_rpc import Client
         from core.instance import get_instance
@@ -67,9 +66,11 @@ def _fetch_all_transmission() -> tuple[list[dict], dict[str, dict], dict[str, di
             username=inst["transmission_user"],
             password=inst["transmission_pass"],
         )
-        active  = []
-        by_name = {}
-        by_hash = {}
+        active        = []
+        by_name       = {}
+        by_hash       = {}
+        by_full_path  = {}
+
         for t in client.get_torrents():
             is_stalled  = t.is_stalled or False
             pct         = round((t.percent_done or 0) * 100, 1)
@@ -96,13 +97,19 @@ def _fetch_all_transmission() -> tuple[list[dict], dict[str, dict], dict[str, di
             by_name[t.name] = info
             if ih:
                 by_hash[ih.lower()] = info
+            # Calea completă: download_dir/name
+            try:
+                full = str(Path(t.download_dir) / t.name)
+                by_full_path[full] = info
+            except Exception:
+                pass
 
             if raw_status not in ("seeding", "stopped", "seed_pending"):
                 active.append(info)
 
-        return active, by_name, by_hash
+        return active, by_name, by_hash, by_full_path
     except Exception:
-        return [], {}, {}
+        return [], {}, {}, {}
 
 
 def _delete_torrent(torrent_id: int, delete_data: bool = True) -> bool:
@@ -191,7 +198,8 @@ def _status_badge(info: dict | None):
     ui.badge(label, color=color)
 
 
-def _render_file(f: Path, dl_dir: str, indent: int = 0, extra_stop: list | None = None):
+def _render_file(f: Path, dl_dir: str, indent: int = 0, extra_stop: list | None = None,
+                 t_info: dict | None = None, on_refresh=None, by_full_path: dict | None = None):
     ext         = f.suffix.lower()
     is_video    = ext in VIDEO_EXTS
     is_subtitle = ext in SUBTITLE_EXTS
@@ -216,8 +224,38 @@ def _render_file(f: Path, dl_dir: str, indent: int = 0, extra_stop: list | None 
                 "flat dense round color=grey"
             ).tooltip("Deschide cu player sistem")
 
+        # Lookup direct după calea completă — mai precis decât t_info de la nivel card
+        file_t_info = t_info
+        if by_full_path:
+            fp_str = str(f)
+            file_t_info = (by_full_path.get(fp_str)
+                           or by_full_path.get(fp_str.replace("\\", "/"))
+                           or t_info)
 
-def _render_dir(path: Path, dl_dir: str, indent: int = 0, extra_stop: list | None = None):
+        async def do_delete_file(fp=f, ti=file_t_info):
+            def _del():
+                # Scoatem din Transmission primul (eliberează lock-ul pe fișier)
+                if ti:
+                    _delete_torrent(ti["id"], delete_data=False)
+                try:
+                    fp.unlink(missing_ok=True)
+                except PermissionError:
+                    raise RuntimeError(f"Fișierul e în uz de alt program: {fp.name}")
+            try:
+                await run.io_bound(_del)
+                ui.notify(f"Șters: {fp.name}", type="warning")
+                if on_refresh:
+                    await on_refresh()
+            except Exception as ex:
+                ui.notify(str(ex), type="negative", timeout=8000)
+
+        ui.button(icon="delete_outline", on_click=do_delete_file).props(
+            "flat dense round color=red"
+        ).tooltip("Șterge fișier + elimină torrent din Transmission")
+
+
+def _render_dir(path: Path, dl_dir: str, indent: int = 0, extra_stop: list | None = None,
+                t_info: dict | None = None, on_refresh=None, by_full_path: dict | None = None):
     size_str   = _fmt_size(_dir_size(path))
     clean_name = clean_title(path.name, extra_stop)
 
@@ -233,9 +271,11 @@ def _render_dir(path: Path, dl_dir: str, indent: int = 0, extra_stop: list | Non
         children = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
         for child in children:
             if child.is_dir():
-                _render_dir(child, dl_dir, indent + 1, extra_stop=extra_stop)
+                _render_dir(child, dl_dir, indent + 1, extra_stop=extra_stop,
+                            t_info=t_info, on_refresh=on_refresh, by_full_path=by_full_path)
             else:
-                _render_file(child, dl_dir, indent + 1, extra_stop=extra_stop)
+                _render_file(child, dl_dir, indent + 1, extra_stop=extra_stop,
+                             t_info=t_info, on_refresh=on_refresh, by_full_path=by_full_path)
 
 
 def _render_active(active: list[dict], extra_stop: list, on_delete):
@@ -325,7 +365,7 @@ def downloads_page():
                 refresh_btn.props(remove="loading")
                 return
 
-            active, by_name, by_hash, top_items, extra_stop = await run.io_bound(_scan, dl_dir)
+            active, by_name, by_hash, by_full_path, top_items, extra_stop = await run.io_bound(_scan, dl_dir)
 
             # ── În curs ──────────────────────────────────────────────────
             active_container.clear()
@@ -365,14 +405,23 @@ def downloads_page():
                                 async def do_delete(p=path, ti=t_info):
                                     def _del():
                                         if ti:
-                                            ok = _delete_torrent(ti["id"], delete_data=True)
-                                            if not ok:
-                                                _delete_path(p)
+                                            # Transmission scoate torrentul și fișierele
+                                            _delete_torrent(ti["id"], delete_data=True)
                                         else:
-                                            _delete_path(p)
-                                    await run.io_bound(_del)
-                                    ui.notify("Șters", type="warning")
-                                    await refresh()
+                                            # Niciun torrent asociat — ștergem manual
+                                            try:
+                                                _delete_path(p)
+                                            except PermissionError:
+                                                raise RuntimeError(
+                                                    "Fișierul e în uz de alt program. "
+                                                    "Oprește redarea sau Transmission și încearcă din nou."
+                                                )
+                                    try:
+                                        await run.io_bound(_del)
+                                        ui.notify("Șters", type="warning")
+                                        await refresh()
+                                    except Exception as ex:
+                                        ui.notify(str(ex), type="negative", timeout=8000)
 
                                 ui.button(icon="delete", on_click=do_delete).props(
                                     "flat dense round color=red"
@@ -383,11 +432,17 @@ def downloads_page():
                             if path.is_dir():
                                 for child in sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
                                     if child.is_dir():
-                                        _render_dir(child, dl_dir, extra_stop=extra_stop)
+                                        _render_dir(child, dl_dir, extra_stop=extra_stop,
+                                                    t_info=t_info, on_refresh=refresh,
+                                                    by_full_path=by_full_path)
                                     else:
-                                        _render_file(child, dl_dir, extra_stop=extra_stop)
+                                        _render_file(child, dl_dir, extra_stop=extra_stop,
+                                                     t_info=t_info, on_refresh=refresh,
+                                                     by_full_path=by_full_path)
                             else:
-                                _render_file(path, dl_dir, extra_stop=extra_stop)
+                                _render_file(path, dl_dir, extra_stop=extra_stop,
+                                             t_info=t_info, on_refresh=refresh,
+                                             by_full_path=by_full_path)
 
             refresh_btn.props(remove="loading")
 
@@ -395,36 +450,34 @@ def downloads_page():
         ui.timer(0.1, refresh, once=True)
 
 
-def _scan(dl_dir: str) -> tuple[list, dict, dict, list, list]:
+def _scan(dl_dir: str) -> tuple[list, dict, dict, dict, list, list]:
     """Pure I/O — single Transmission call + filesystem scan.
-    Returns (active, by_name, by_hash, top_items, extra_stop)."""
-    active, by_name, by_hash = _fetch_all_transmission()
+    Returns (active, by_name, by_hash, by_full_path, top_items, extra_stop)."""
+    active, by_name, by_hash, by_full_path = _fetch_all_transmission()
     extra_stop = get_cleanup_tokens()
-
-    # Hash index from DB for fallback matching
-    db_hashes: dict[str, str] = {}
-    try:
-        from core.db import Session, Download
-        with Session() as s:
-            for r in s.query(Download).filter_by(instance_id=INSTANCE_ID).all():
-                if r.torrent_hash:
-                    db_hashes[r.torrent_hash.lower()] = r.title or ""
-    except Exception:
-        pass
 
     root      = Path(dl_dir)
     top_items = []
     for p in sorted(root.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
         if p.name.startswith("."):
             continue
-        size   = _dir_size(p) if p.is_dir() else p.stat().st_size
+        size = _dir_size(p) if p.is_dir() else p.stat().st_size
+
+        # 1. Match după nume direct
         t_info = by_name.get(p.name)
+
+        # 2. Match după calea completă (torrent descărcat în subfolderul nostru)
         if not t_info:
-            for h, title in db_hashes.items():
-                if title and title == p.name:
-                    t_info = by_hash.get(h)
-                    if t_info:
-                        break
+            t_info = by_full_path.get(str(p))
+
+        # 3. Match după calea completă cu separatoare Windows/Unix normalizate
+        if not t_info:
+            p_str = str(p).replace("\\", "/")
+            for full, info in by_full_path.items():
+                if full.replace("\\", "/") == p_str:
+                    t_info = info
+                    break
+
         top_items.append((p, size, [], t_info))
 
-    return active, by_name, by_hash, top_items, extra_stop
+    return active, by_name, by_hash, by_full_path, top_items, extra_stop
