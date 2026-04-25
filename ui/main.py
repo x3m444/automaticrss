@@ -30,4 +30,4 @@ def serve_media(path: str):
 def start_ui():
     from core.instance import ensure_instance
     ensure_instance()
-    ui.run(title="AutomaticRSS", port=8080, reload=False)
+    ui.run(title="AutomaticRSS", host="0.0.0.0", port=8080, reload=False)
