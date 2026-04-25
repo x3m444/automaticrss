@@ -104,6 +104,7 @@ $DbPass = Prompt-If-Empty $DbPass "  DB Password" -Secret
 $DbName = Prompt-If-Empty $DbName "  DB Name" "postgres"
 $DbPort = Prompt-If-Empty $DbPort "  DB Port" "5432"
 
+$InstanceId = [System.Guid]::NewGuid().ToString()
 $SecretsDir = Join-Path $InstallDir ".secrets"
 New-Item -ItemType Directory -Force -Path $SecretsDir | Out-Null
 $SecretsContent = @"
@@ -112,9 +113,10 @@ DB_PORT = "$DbPort"
 DB_NAME = "$DbName"
 DB_USER = "$DbUser"
 DB_PASS = "$DbPass"
+INSTANCE_ID = "$InstanceId"
 "@
 Set-Content -Path (Join-Path $SecretsDir "secrets.toml") -Value $SecretsContent -Encoding UTF8
-Write-Ok "secrets.toml creat."
+Write-Ok "secrets.toml creat (INSTANCE_ID: $InstanceId)."
 
 # ── Configurare Transmission ──────────────────────────────────────────────────
 Write-Host ""

@@ -93,6 +93,7 @@ echo -e "${CYAN}── Configurare bază de date Supabase ──${NC}"
 [[ -z "$DB_PASS" ]] && read -rsp " DB Password: "                         DB_PASS && echo ""
 [[ -z "$DB_NAME" ]] && read -rp "  DB Name [postgres]: "                  TMP && DB_NAME="${TMP:-postgres}"
 
+INSTANCE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
 mkdir -p "$INSTALL_DIR/.secrets"
 cat > "$INSTALL_DIR/.secrets/secrets.toml" <<EOF
 DB_HOST = "$DB_HOST"
@@ -100,9 +101,10 @@ DB_PORT = "$DB_PORT"
 DB_NAME = "$DB_NAME"
 DB_USER = "$DB_USER"
 DB_PASS = "$DB_PASS"
+INSTANCE_ID = "$INSTANCE_ID"
 EOF
 chmod 600 "$INSTALL_DIR/.secrets/secrets.toml"
-ok "secrets.toml creat."
+ok "secrets.toml creat (INSTANCE_ID: $INSTANCE_ID)."
 
 # ── Configurare Transmission ──────────────────────────────────────────────────
 echo ""
