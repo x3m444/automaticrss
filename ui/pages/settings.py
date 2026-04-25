@@ -251,10 +251,12 @@ def settings_page():
             jackett_status = ui.label("").classes("text-sm")
 
             def save_global():
+                import json
                 with Session() as s:
-                    _set_setting(s, "flaresolverr_url", fs_url.value.rstrip("/"))
-                    _set_setting(s, "jackett_url",      jackett_url.value.rstrip("/"))
-                    _set_setting(s, "jackett_api_key",  jackett_key.value.strip())
+                    _set_setting(s, "flaresolverr_url",      fs_url.value.rstrip("/"))
+                    _set_setting(s, "jackett_url",           jackett_url.value.rstrip("/"))
+                    _set_setting(s, "jackett_api_key",       jackett_key.value.strip())
+                    _set_setting(s, "title_cleanup_tokens",  json.dumps(cleanup_tokens))
                     s.commit()
                 ui.notify("✓ Salvat global", type="positive")
 
@@ -293,6 +295,48 @@ def settings_page():
                 except Exception as e:
                     jackett_status.set_text(f"✘ {e}")
                     jackett_status.classes(replace="text-sm text-red-600")
+
+            # Tokeni curățare titluri
+            ui.separator()
+            ui.label("Afișare titluri — tokeni ignorați").classes("text-sm font-medium text-gray-500")
+            ui.label(
+                "Cuvinte/grupuri eliminate din titlurile torrent la afișare (Downloads, Search, Logs). "
+                "Ex: grupuri release (YIFY, FGT), watermarkuri."
+            ).classes("text-xs text-gray-400")
+
+            import json as _json
+            with Session() as s:
+                _tok_row = s.query(Setting).filter_by(key="title_cleanup_tokens").first()
+                cleanup_tokens: list[str] = _json.loads(_tok_row.value) if _tok_row and _tok_row.value else []
+
+            tok_row = ui.row().classes("flex-wrap gap-2 min-h-8 items-center mt-1")
+
+            def _render_tok_chips():
+                tok_row.clear()
+                with tok_row:
+                    for tok in cleanup_tokens:
+                        ui.chip(
+                            tok, removable=True, color="orange",
+                            on_value_change=lambda e, t=tok: (
+                                cleanup_tokens.remove(t) if t in cleanup_tokens else None,
+                                _render_tok_chips(),
+                            ),
+                        ).props("dense")
+
+            _render_tok_chips()
+
+            with ui.row().classes("items-center gap-1 mt-1"):
+                tok_inp = ui.input(placeholder="ex: YIFY, FGT, Visit.us.at…").classes("w-64")
+
+                def _add_tok(_=None):
+                    val = tok_inp.value.strip()
+                    if val and val not in cleanup_tokens:
+                        cleanup_tokens.append(val)
+                        _render_tok_chips()
+                    tok_inp.set_value("")
+
+                tok_inp.on("keydown.enter", _add_tok)
+                ui.button(icon="add", on_click=_add_tok).props("flat dense round")
 
             with ui.row().classes("gap-2 mt-3"):
                 ui.button("Salvează global", on_click=save_global).props("color=primary")

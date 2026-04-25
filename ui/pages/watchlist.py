@@ -1,6 +1,7 @@
 from nicegui import ui, run
 from ui.layout import navbar
 from core.db import Session, Watchlist, WatchlistLog, Feed, Setting
+from core.utils import clean_title, get_cleanup_tokens
 
 
 def _get_base_dir() -> str:
@@ -320,6 +321,7 @@ def watchlist_page():
                         def _render_log_panel(container, wid=e["id"]):
                             container.clear()
                             logs = _load_logs(wid)
+                            _tok = get_cleanup_tokens()
                             with container:
                                 if not logs:
                                     ui.label("Nicio rulare înregistrată încă.").classes(
@@ -361,7 +363,10 @@ def watchlist_page():
                                                 with ui.row().classes("items-start gap-2 py-0.5"):
                                                     ui.icon(icon, color=icolor).classes("text-sm mt-0.5 shrink-0")
                                                     with ui.column().classes("gap-0"):
-                                                        ui.label(title).classes("text-xs leading-tight")
+                                                        display_title = clean_title(title, _tok)
+                                                        lbl = ui.label(display_title).classes("text-xs leading-tight")
+                                                        if display_title != title:
+                                                            lbl.tooltip(title)
                                                         if reason:
                                                             ui.label(reason).classes("text-xs text-gray-400")
                                             if overflow:

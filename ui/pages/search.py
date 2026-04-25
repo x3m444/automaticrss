@@ -3,6 +3,7 @@ from nicegui import ui, run
 from ui.layout import navbar
 from core.scrapers import SCRAPERS
 from core.db import Session, Setting, Watchlist
+from core.utils import clean_title, get_cleanup_tokens
 
 
 def _get_base_dir() -> str:
@@ -105,6 +106,7 @@ def search_page():
     navbar()
 
     state: dict = {"results": []}
+    _cleanup_tokens = get_cleanup_tokens()
 
     with ui.column().classes("w-full p-6 gap-6"):
         ui.label("Caută").classes("text-xl font-bold")
@@ -211,11 +213,13 @@ def search_page():
                     for r in shown:
                         seeds = r.get("seeders", 0) or 0
                         leech = r.get("leechers", 0) or 0
+                        raw_title = r.get("title", "")
+                        display   = clean_title(raw_title, _cleanup_tokens)
                         with ui.row().classes("w-full items-center px-3 py-2 border-t border-gray-700 gap-2"):
                             ui.badge(r.get("source", "—")).props("outline color=purple").classes("w-28 shrink-0")
-                            ui.label(r.get("title", "")).classes("flex-1 text-sm").style(
+                            ui.label(display).classes("flex-1 text-sm").style(
                                 "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:500px"
-                            )
+                            ).tooltip(raw_title)
                             ui.label(r.get("size", "—")).classes("w-24 shrink-0 text-xs text-gray-400")
                             ui.label(str(seeds)).classes("w-14 shrink-0 text-xs text-right").style(
                                 f"color: {'#4caf50' if seeds > 0 else '#9e9e9e'}"

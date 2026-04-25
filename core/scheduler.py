@@ -106,11 +106,12 @@ def _check_disk_space():
     # Sortează după doneDate (cel mai vechi completat primul); finished/seeding
     def _done_ts(t):
         try:
-            return t.doneDate or 0
+            dd = t.done_date
+            return dd.timestamp() if dd else 0
         except Exception:
             return 0
 
-    candidates = [t for t in torrents if t.status in ("seeding", "stopped")]
+    candidates = [t for t in torrents if t.status in ("seeding", "stopped", "seed_pending")]
     candidates.sort(key=_done_ts)
 
     freed = 0
@@ -118,7 +119,7 @@ def _check_disk_space():
         usage = shutil.disk_usage(dl_dir)
         if usage.free >= target_free:
             break
-        size = (t.totalSize or 0)
+        size = (t.total_size or 0)
         try:
             client.remove_torrent(t.id, delete_data=True)
             freed += size
