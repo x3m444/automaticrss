@@ -220,6 +220,72 @@ def settings_page():
                 ui.button("Salvează", on_click=save_disk).props("color=primary")
                 ui.button("Verifică spațiu acum", on_click=check_now).props("outline")
 
+        # ── Transmission — Limite ────────────────────────────────────────
+        with ui.card().classes("w-full max-w-xl gap-2"):
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Transmission — Limite").classes("text-lg font-semibold")
+                ui.badge("per-mașină", color="grey").props("outline")
+
+            ui.label("Viteze în KB/s (0 = nelimitat). Coada limitează torrentele active simultan.") \
+              .classes("text-xs text-gray-400")
+
+            dl_enabled = ui.switch("Limitează download", value=False)
+            with ui.row().classes("w-full items-center gap-4"):
+                dl_limit = ui.number("Download (KB/s)", value=0, min=0, step=100).classes("flex-1")
+
+            ui.separator()
+
+            ul_enabled = ui.switch("Limitează upload", value=False)
+            with ui.row().classes("w-full items-center gap-4"):
+                ul_limit = ui.number("Upload (KB/s)", value=0, min=0, step=100).classes("flex-1")
+
+            ui.separator()
+
+            queue_enabled = ui.switch("Limitează coada de download", value=True)
+            with ui.row().classes("w-full items-center gap-4"):
+                queue_size = ui.number("Torrente simultane", value=5, min=1, step=1).classes("flex-1")
+
+            tr_limits_status = ui.label("").classes("text-sm mt-1")
+
+            def _load_tr_limits():
+                try:
+                    c = _connect()
+                    sess = c.get_session()
+                    dl_enabled.set_value(sess.speed_limit_down_enabled)
+                    dl_limit.set_value(sess.speed_limit_down or 0)
+                    ul_enabled.set_value(sess.speed_limit_up_enabled)
+                    ul_limit.set_value(sess.speed_limit_up or 0)
+                    queue_enabled.set_value(sess.download_queue_enabled)
+                    queue_size.set_value(sess.download_queue_size or 5)
+                    tr_limits_status.set_text("✔ Valori citite din Transmission")
+                    tr_limits_status.classes(replace="text-sm text-green-600")
+                except Exception as e:
+                    tr_limits_status.set_text(f"✘ {e}")
+                    tr_limits_status.classes(replace="text-sm text-red-600")
+
+            def save_tr_limits():
+                try:
+                    c = _connect()
+                    c.set_session(
+                        speed_limit_down_enabled=dl_enabled.value,
+                        speed_limit_down=int(dl_limit.value or 0),
+                        speed_limit_up_enabled=ul_enabled.value,
+                        speed_limit_up=int(ul_limit.value or 0),
+                        download_queue_enabled=queue_enabled.value,
+                        download_queue_size=int(queue_size.value or 5),
+                    )
+                    ui.notify("✓ Limite salvate în Transmission", type="positive")
+                    tr_limits_status.set_text("✔ Aplicate")
+                    tr_limits_status.classes(replace="text-sm text-green-600")
+                except Exception as e:
+                    ui.notify(f"Eroare: {e}", type="negative")
+
+            with ui.row().classes("gap-2 mt-3"):
+                ui.button("Salvează", on_click=save_tr_limits).props("color=primary")
+                ui.button("Citește din Transmission", on_click=_load_tr_limits).props("outline")
+
+            ui.timer(0.3, _load_tr_limits, once=True)
+
         # ── Setări globale (shared între toate mașinile) ─────────────────
         with ui.card().classes("w-full max-w-xl gap-2"):
             with ui.row().classes("w-full items-center justify-between"):
