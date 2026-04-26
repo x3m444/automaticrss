@@ -245,6 +245,12 @@ def settings_page():
             with ui.row().classes("w-full items-center gap-4"):
                 queue_size = ui.number("Torrente simultane", value=5, min=1, step=1).classes("flex-1")
 
+            ui.separator()
+
+            no_seed = ui.switch("Oprește seeding-ul după descărcare", value=False)
+            ui.label("Torrentele completate se opresc automat, fișierele rămân pe disk.") \
+              .classes("text-xs text-gray-400")
+
             tr_limits_status = ui.label("").classes("text-sm mt-1")
 
             def _load_tr_limits():
@@ -257,6 +263,10 @@ def settings_page():
                     ul_limit.set_value(sess.speed_limit_up or 0)
                     queue_enabled.set_value(sess.download_queue_enabled)
                     queue_size.set_value(sess.download_queue_size or 5)
+                    no_seed.set_value(
+                        getattr(sess, "seed_ratio_limited", False) and
+                        (getattr(sess, "seed_ratio_limit", 1.0) or 1.0) == 0.0
+                    )
                     tr_limits_status.set_text("✔ Valori citite din Transmission")
                     tr_limits_status.classes(replace="text-sm text-green-600")
                 except Exception as e:
@@ -273,6 +283,8 @@ def settings_page():
                         speed_limit_up=int(ul_limit.value or 0),
                         download_queue_enabled=queue_enabled.value,
                         download_queue_size=int(queue_size.value or 5),
+                        seed_ratio_limited=no_seed.value,
+                        seed_ratio_limit=0.0 if no_seed.value else 1.0,
                     )
                     ui.notify("✓ Limite salvate în Transmission", type="positive")
                     tr_limits_status.set_text("✔ Aplicate")
