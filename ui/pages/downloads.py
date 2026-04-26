@@ -2,7 +2,7 @@ import os
 import subprocess
 import platform
 from pathlib import Path
-from nicegui import ui, run, app
+from nicegui import ui, run
 from ui.layout import navbar
 from core.db import Session, Instance
 from core.config import INSTANCE_ID
@@ -112,21 +112,17 @@ def _fetch_all_transmission() -> tuple[list[dict], dict[str, dict], dict[str, di
         return [], {}, {}, {}
 
 
-def _delete_torrent(torrent_id: int, delete_data: bool = True) -> bool:
-    try:
-        from transmission_rpc import Client
-        from core.instance import get_instance
-        inst = get_instance()
-        client = Client(
-            host=inst["transmission_host"],
-            port=inst["transmission_port"],
-            username=inst["transmission_user"],
-            password=inst["transmission_pass"],
-        )
-        client.remove_torrent(torrent_id, delete_data=delete_data)
-        return True
-    except Exception:
-        return False
+def _delete_torrent(torrent_id: int, delete_data: bool = True):
+    from transmission_rpc import Client
+    from core.instance import get_instance
+    inst = get_instance()
+    client = Client(
+        host=inst["transmission_host"],
+        port=inst["transmission_port"],
+        username=inst["transmission_user"],
+        password=inst["transmission_pass"],
+    )
+    client.remove_torrent(torrent_id, delete_data=delete_data)
 
 
 def _delete_path(path: Path):
@@ -332,8 +328,11 @@ def _render_active(active: list[dict], extra_stop: list, on_delete):
                 ui.badge(status, color=color).props("outline")
 
                 async def do_del(tid=t["id"]):
-                    ok = await run.io_bound(_delete_torrent, tid, True)
-                    ui.notify("Șters" if ok else "Eroare la ștergere", type="warning" if ok else "negative")
+                    try:
+                        await run.io_bound(_delete_torrent, tid, True)
+                        ui.notify("Șters", type="warning")
+                    except Exception as ex:
+                        ui.notify(f"Eroare: {ex}", type="negative", timeout=8000)
                     await on_delete()
 
                 ui.button(icon="delete", on_click=do_del).props(
@@ -365,7 +364,7 @@ def downloads_page():
                 refresh_btn.props(remove="loading")
                 return
 
-            active, by_name, by_hash, by_full_path, top_items, extra_stop = await run.io_bound(_scan, dl_dir)
+            active, by_full_path, top_items, extra_stop = await run.io_bound(_scan, dl_dir)
 
             # ── În curs ──────────────────────────────────────────────────
             active_container.clear()
@@ -450,10 +449,10 @@ def downloads_page():
         ui.timer(0.1, refresh, once=True)
 
 
-def _scan(dl_dir: str) -> tuple[list, dict, dict, dict, list, list]:
+def _scan(dl_dir: str) -> tuple[list, dict, list, list]:
     """Pure I/O — single Transmission call + filesystem scan.
-    Returns (active, by_name, by_hash, by_full_path, top_items, extra_stop)."""
-    active, by_name, by_hash, by_full_path = _fetch_all_transmission()
+    Returns (active, by_full_path, top_items, extra_stop)."""
+    active, by_name, _by_hash, by_full_path = _fetch_all_transmission()
     extra_stop = get_cleanup_tokens()
 
     root      = Path(dl_dir)
@@ -480,4 +479,4 @@ def _scan(dl_dir: str) -> tuple[list, dict, dict, dict, list, list]:
 
         top_items.append((p, size, [], t_info))
 
-    return active, by_name, by_hash, by_full_path, top_items, extra_stop
+    return active, by_full_path, top_items, extra_stop
