@@ -403,18 +403,19 @@ def downloads_page():
 
                                 async def do_delete(p=path, ti=t_info):
                                     def _del():
+                                        import time
                                         if ti:
-                                            # Transmission scoate torrentul și fișierele
-                                            _delete_torrent(ti["id"], delete_data=True)
-                                        else:
-                                            # Niciun torrent asociat — ștergem manual
-                                            try:
-                                                _delete_path(p)
-                                            except PermissionError:
-                                                raise RuntimeError(
-                                                    "Fișierul e în uz de alt program. "
-                                                    "Oprește redarea sau Transmission și încearcă din nou."
-                                                )
+                                            # Scoatem din Transmission fără ștergere — eliberează handle-ul
+                                            _delete_torrent(ti["id"], delete_data=False)
+                                            time.sleep(0.5)
+                                        # Ștergem manual după ce Transmission a eliberat fișierul
+                                        try:
+                                            _delete_path(p)
+                                        except PermissionError:
+                                            raise RuntimeError(
+                                                "Fișierul e în uz de alt program. "
+                                                "Oprește redarea sau Transmission și încearcă din nou."
+                                            )
                                     try:
                                         await run.io_bound(_del)
                                         ui.notify("Șters", type="warning")
