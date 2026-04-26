@@ -3,7 +3,7 @@ from nicegui import ui, app
 from fastapi import Response
 from fastapi.responses import FileResponse
 from ui.pages import feeds, downloads, settings, filters, watchlist, search
-import ui.auth  # registers /login and /logout routes
+from . import auth as _auth  # registers /login and /logout routes
 
 
 @ui.page("/")
