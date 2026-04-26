@@ -126,13 +126,11 @@ def _delete_torrent(torrent_id: int, delete_data: bool = True):
 
 
 def _delete_path(path: Path):
-    """Șterge fișierele unui torrent fără a atinge structura de foldere."""
+    import shutil
     if path.is_file():
         path.unlink(missing_ok=True)
     elif path.is_dir():
-        for f in path.rglob("*"):
-            if f.is_file():
-                f.unlink(missing_ok=True)
+        shutil.rmtree(path, ignore_errors=False)
 
 
 def _open_with_system(filepath: str):
