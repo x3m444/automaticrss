@@ -3,6 +3,7 @@ from nicegui import ui, app
 from fastapi import Response
 from fastapi.responses import FileResponse
 from ui.pages import feeds, downloads, settings, filters, watchlist, search
+import ui.auth  # registers /login and /logout routes
 
 
 @ui.page("/")
@@ -30,4 +31,5 @@ def serve_media(path: str):
 def start_ui():
     from core.instance import ensure_instance
     ensure_instance()
-    ui.run(title="AutomaticRSS", host="0.0.0.0", port=8080, reload=False)
+    ui.run(title="AutomaticRSS", host="0.0.0.0", port=8080, reload=False,
+           storage_secret="arss-storage-key-change-me")

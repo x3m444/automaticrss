@@ -1,8 +1,12 @@
 from nicegui import ui
+from ui.auth import check_auth, _cfg
 
 
 def navbar():
+    check_auth()
+
     dark = ui.dark_mode()
+    auth_enabled, _, _ = _cfg()
 
     with ui.header().classes("bg-gray-900 text-white"):
         with ui.row().classes("w-full items-center gap-6 px-4 py-2"):
@@ -21,5 +25,8 @@ def navbar():
                 icon_btn.props(f"icon={'light_mode' if dark.value else 'dark_mode'}")
 
             icon_btn = ui.button(icon="dark_mode", on_click=toggle_dark).props("flat dense round color=white")
+
+            if auth_enabled:
+                ui.button(icon="logout", on_click=lambda: ui.navigate.to("/logout")).props("flat dense round color=white").tooltip("Deconectare")
 
     dark.enable()
