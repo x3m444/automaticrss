@@ -7,7 +7,7 @@ from ui.pages import feeds, downloads, settings, filters, watchlist, search
 
 @ui.page("/")
 def index():
-    ui.navigate.to("/feeds")
+    ui.navigate.to("/downloads")
 
 
 @app.get("/media/{path:path}")
