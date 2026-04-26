@@ -7,9 +7,8 @@ from core.utils import clean_title, get_cleanup_tokens
 
 
 def _get_base_dir() -> str:
-    with Session() as s:
-        row = s.query(Setting).filter_by(key="transmission_download_dir").first()
-        return row.value if row and row.value else ""
+    from core.instance import get_instance
+    return get_instance().get("download_dir") or ""
 
 
 def _get_flaresolverr() -> str | None:
@@ -31,15 +30,13 @@ def _known_subdirs() -> list[str]:
 def _send_download_sync(item: dict, subdir: str | None) -> tuple[bool, str]:
     try:
         from transmission_rpc import Client
-        with Session() as s:
-            def get(key, default):
-                row = s.query(Setting).filter_by(key=key).first()
-                return row.value if row else default
-            host     = get("transmission_host", "localhost")
-            port     = int(get("transmission_port", "9091"))
-            user     = get("transmission_user", "")
-            pwd      = get("transmission_pass", "")
-            base_dir = get("transmission_download_dir", "")
+        from core.instance import get_instance
+        inst = get_instance()
+        host     = inst["transmission_host"]
+        port     = inst["transmission_port"]
+        user     = inst["transmission_user"]
+        pwd      = inst["transmission_pass"]
+        base_dir = inst["download_dir"] or ""
 
         client = Client(host=host, port=port, username=user, password=pwd)
         download_dir = f"{base_dir.rstrip('/')}/{subdir}" if subdir and base_dir else base_dir or None
