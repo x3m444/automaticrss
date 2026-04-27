@@ -389,11 +389,11 @@ def _render_media_grid(container, items: list[dict], media_type: str, actor_name
         with ui.grid().classes("w-full grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3"):
             for item in items:
                 if actor_name:
-                    subdir = f"actors/{actor_name}"
+                    subdir = f"tpdb/actors/{actor_name}"
                 elif media_type == "scenes":
-                    subdir = "scenes"
+                    subdir = "tpdb/scenes"
                 else:
-                    subdir = "movies"
+                    subdir = "tpdb/movies"
                 _render_card(item, subdir, media_type)
 
         if state.get("last_page", 1) > 1:
