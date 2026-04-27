@@ -171,7 +171,7 @@ def _render_result(container, result: dict):
                                 ui.label(movie["distributor"]).classes("text-xs text-gray-500")
                         ui.link("IAFD", movie["iafd_url"], new_tab=True).classes("text-xs text-gray-500 shrink-0")
 
-                        async def cauta_torrente(title=movie["title"], area=torrent_area):
+                        async def cauta_torrente(title=movie["title"], area=torrent_area, actor=result["name"]):
                             area.clear()
                             with area:
                                 ui.spinner(size="sm")
@@ -183,14 +183,16 @@ def _render_result(container, result: dict):
                                     ui.label("Niciun torrent găsit.").classes("text-xs text-gray-400 pl-12")
                                 return
                             with area:
-                                _render_torrents(results[:8], title)
+                                _render_torrents(results[:8], title, actor)
 
                         ui.button("Caută", on_click=cauta_torrente).props("outline dense size=sm color=primary")
 
                     ui.separator().classes("opacity-20")
 
 
-def _render_torrents(results: list[dict], movie_title: str):
+def _render_torrents(results: list[dict], movie_title: str, actor_name: str = ""):
+    subdir = f"actors/{actor_name}".strip("/") if actor_name else "actors"
+
     for r in results:
         title = r.get("title", movie_title)
         size  = _fmt_size(r.get("size_bytes", 0))
@@ -205,10 +207,10 @@ def _render_torrents(results: list[dict], movie_title: str):
             if src:
                 ui.label(src).classes("text-gray-600 shrink-0")
 
-            async def do_download(item=r):
-                ok, msg = await run.io_bound(_send_download, item, None)
+            async def do_download(item=r, sd=subdir):
+                ok, msg = await run.io_bound(_send_download, item, sd)
                 if ok:
-                    ui.notify("✓ Adăugat în Transmission", type="positive")
+                    ui.notify(f"✓ Adăugat → {sd}", type="positive")
                 else:
                     ui.notify(f"✘ {msg}", type="negative", timeout=8000)
 
