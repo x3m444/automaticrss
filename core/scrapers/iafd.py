@@ -56,4 +56,4 @@ def _parse_movies(soup: BeautifulSoup) -> list[dict]:
             "year":     year,
             "iafd_url": BASE + href if href.startswith("/") else href,
         })
-    return movies
+    return sorted(movies, key=lambda m: m["year"], reverse=True)
