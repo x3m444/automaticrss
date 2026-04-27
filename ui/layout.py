@@ -13,6 +13,7 @@ def navbar():
             ui.label("AutomaticRSS").classes("text-xl font-bold tracking-wide")
             ui.link("Downloads", "/downloads").classes("text-white hover:text-gray-300")
             ui.link("Caută",     "/search").classes("text-white hover:text-gray-300")
+            ui.link("Actori",    "/actors").classes("text-white hover:text-gray-300")
             ui.link("Watchlist", "/watchlist").classes("text-white hover:text-gray-300")
             ui.link("Feeds",     "/feeds").classes("text-white hover:text-gray-300")
             ui.link("Filtre",    "/filters").classes("text-white hover:text-gray-300")

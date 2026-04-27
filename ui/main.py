@@ -2,7 +2,7 @@ from pathlib import Path
 from nicegui import ui, app
 from fastapi import Response
 from fastapi.responses import FileResponse
-from ui.pages import feeds, downloads, settings, filters, watchlist, search
+from ui.pages import feeds, downloads, settings, filters, watchlist, search, actors
 from . import auth as _auth  # registers /login and /logout routes
 
 

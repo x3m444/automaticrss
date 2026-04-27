@@ -99,7 +99,7 @@ def _search_all(query: str, selected_ids: list[str], flaresolverr: str | None) -
 
 
 @ui.page("/search")
-def search_page():
+def search_page(q: str = ""):
     navbar()
 
     state: dict = {"results": []}
@@ -253,3 +253,7 @@ def search_page():
 
         search_btn.on("click", do_search)
         query_input.on("keydown.enter", do_search)
+
+        if q:
+            query_input.set_value(q)
+            ui.timer(0.1, do_search, once=True)
