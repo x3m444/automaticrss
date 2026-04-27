@@ -101,6 +101,50 @@ def _parse_sort(val: str) -> tuple[str, str]:
     return (parts[0], parts[1]) if len(parts) == 2 else ("created_at", "desc")
 
 
+# ── Autocomplete widget ───────────────────────────────────────────────────────
+
+def _make_autocomplete(placeholder: str, fetch_fn, result_state: dict, key: str) -> ui.input:
+    """
+    Builds an input with live-search dropdown.
+    fetch_fn(text) → list[{id, name}]
+    On selection stores {id, name} into result_state[key].
+    """
+    inp = ui.input(placeholder=placeholder).classes("w-48")
+    menu = ui.menu().props("no-parent-event")
+
+    def _pick(name: str, item_id):
+        inp.set_value(name)
+        result_state[key] = {"id": item_id, "name": name}
+        menu.close()
+
+    def _clear(_=None):
+        if inp.value.strip() == "":
+            result_state[key] = None
+            menu.close()
+
+    async def on_keyup(_=None):
+        text = inp.value.strip()
+        if len(text) < 2:
+            menu.close()
+            if text == "":
+                result_state[key] = None
+            return
+        results = await run.io_bound(lambda: fetch_fn(text))
+        menu.clear()
+        with menu:
+            for r in results[:10]:
+                name, rid = r["name"], r["id"]
+                ui.menu_item(name, on_click=lambda n=name, i=rid: _pick(n, i))
+        if results:
+            menu.open()
+        else:
+            menu.close()
+
+    inp.on("keyup", on_keyup)
+    inp.on("change", _clear)
+    return inp
+
+
 # ── Page ────────────────────────────────────────────────────────────────────
 
 @ui.page("/actors")
@@ -180,18 +224,27 @@ def _build_performer_tab():
 # ── Tab: Caută Film / Scenă ──────────────────────────────────────────────────
 
 def _build_search_tab(media_type: str):
-    is_movie = media_type == "movies"
-    ph = "ex: Anal, Mia Malkova Experience…" if is_movie else "ex: Mia Malkova, Big Tits…"
+    is_movie  = media_type == "movies"
+    ph        = "ex: Anal, Mia Malkova Experience…" if is_movie else "ex: Mia Malkova, Big Tits…"
     found_lbl = "filme" if is_movie else "scene"
 
     state: dict = {"page": 1, "last_page": 1}
+    filters: dict = {"site": None, "performer": None}  # each: {id, name} or None
+
+    from core.scrapers.tpdb import search_sites, search_performers_lite
 
     with ui.column().classes("w-full gap-3"):
-        with ui.row().classes("w-full items-center gap-3 flex-wrap max-w-3xl"):
-            inp      = ui.input(placeholder=ph).classes("flex-1 min-w-48")
-            site_inp = ui.input(placeholder="Studio (ex: Brazzers)").classes("w-40")
+        # ── search row
+        with ui.row().classes("w-full items-center gap-3 flex-wrap max-w-4xl"):
+            inp = ui.input(placeholder=ph).classes("flex-1 min-w-48")
+            btn = ui.button("Caută", icon="search").props("color=primary")
+
+        # ── filter row
+        with ui.row().classes("w-full items-center gap-3 flex-wrap max-w-4xl"):
+            ui.label("Filtre:").classes("text-xs text-gray-500")
+            _make_autocomplete("Studio (ex: Brazzers)",  search_sites,           filters, "site")
+            _make_autocomplete("Performer (ex: Mia M.)", search_performers_lite, filters, "performer")
             sort_sel = ui.select(SORT_OPTIONS, value="created_at|desc", label="Sortare").classes("w-44")
-            btn      = ui.button("Caută", icon="search").props("color=primary")
 
         status_lbl  = ui.label("").classes("text-sm text-gray-400")
         results_col = ui.column().classes("w-full max-w-5xl")
@@ -200,9 +253,10 @@ def _build_search_tab(media_type: str):
             query = inp.value.strip()
             if not query:
                 return
-            sort, order = _parse_sort(sort_sel.value)
-            site = site_inp.value.strip()
-            state["page"] = 1
+            sort, order    = _parse_sort(sort_sel.value)
+            site_name      = (filters["site"] or {}).get("name", "")
+            performer_id   = (filters["performer"] or {}).get("id")
+            state["page"]  = 1
             btn.props("loading")
             status_lbl.set_text("Se caută…")
             results_col.clear()
@@ -210,13 +264,15 @@ def _build_search_tab(media_type: str):
             if is_movie:
                 data = await run.io_bound(
                     lambda: __import__("core.scrapers.tpdb", fromlist=["search_movies"])
-                            .search_movies(query, site=site, sort=sort, order=order, page=1, per_page=24)
+                            .search_movies(query, site=site_name, performer_id=performer_id,
+                                           sort=sort, order=order, page=1, per_page=24)
                 )
                 items = data["movies"]
             else:
                 data = await run.io_bound(
                     lambda: __import__("core.scrapers.tpdb", fromlist=["search_scenes"])
-                            .search_scenes(query, site=site, sort=sort, order=order, page=1, per_page=24)
+                            .search_scenes(query, site=site_name, performer_id=performer_id,
+                                           sort=sort, order=order, page=1, per_page=24)
                 )
                 items = data["scenes"]
 
@@ -233,12 +289,17 @@ def _build_search_tab(media_type: str):
 
 def _build_recent_tab(media_type: str):
     is_movie = media_type == "movies"
-    state: dict = {"page": 1, "last_page": 1}
+    state: dict  = {"page": 1, "last_page": 1}
+    filters: dict = {"site": None, "performer": None}
+
+    from core.scrapers.tpdb import search_sites, search_performers_lite
 
     with ui.column().classes("w-full gap-3"):
-        with ui.row().classes("w-full items-center gap-3 flex-wrap max-w-3xl"):
-            site_inp = ui.input(placeholder="Studio (ex: Brazzers)").classes("w-40")
-            sort_sel = ui.select(SORT_OPTIONS, value="created_at|desc", label="Sortare").classes("w-44")
+        with ui.row().classes("w-full items-center gap-3 flex-wrap max-w-4xl"):
+            ui.label("Filtre:").classes("text-xs text-gray-500")
+            _make_autocomplete("Studio (ex: Brazzers)",  search_sites,           filters, "site")
+            _make_autocomplete("Performer (ex: Mia M.)", search_performers_lite, filters, "performer")
+            sort_sel  = ui.select(SORT_OPTIONS, value="created_at|desc", label="Sortare").classes("w-44")
             apply_btn = ui.button("Aplică", icon="filter_list").props("outline color=primary")
 
         status_lbl = ui.label("Se încarcă…").classes("text-sm text-gray-400")
@@ -248,23 +309,24 @@ def _build_recent_tab(media_type: str):
             state["page"] = page
             container.clear()
             status_lbl.set_text("Se încarcă…")
-            sort, order = _parse_sort(sort_sel.value)
-            site = site_inp.value.strip()
+            sort, order  = _parse_sort(sort_sel.value)
+            site_name    = (filters["site"] or {}).get("name", "")
+            performer_id = (filters["performer"] or {}).get("id")
 
             if is_movie:
                 data = await run.io_bound(
                     lambda: __import__("core.scrapers.tpdb", fromlist=["get_latest_movies"])
-                            .get_latest_movies(site=site, sort=sort, order=order, page=page, per_page=48)
+                            .get_latest_movies(site=site_name, performer_id=performer_id,
+                                               sort=sort, order=order, page=page, per_page=48)
                 )
-                items = data["movies"]
-                label = "Filme"
+                items, label = data["movies"], "Filme"
             else:
                 data = await run.io_bound(
                     lambda: __import__("core.scrapers.tpdb", fromlist=["get_latest_scenes"])
-                            .get_latest_scenes(site=site, sort=sort, order=order, page=page, per_page=48)
+                            .get_latest_scenes(site=site_name, performer_id=performer_id,
+                                               sort=sort, order=order, page=page, per_page=48)
                 )
-                items = data["scenes"]
-                label = "Scene"
+                items, label = data["scenes"], "Scene"
 
             state["last_page"] = data["last_page"]
             status_lbl.set_text(f"{label} — pagina {page} din {data['last_page']}")
@@ -297,16 +359,16 @@ def _render_performer(container, perf: dict):
                             ui.badge(f"★ {perf['rating']}", color="amber")
 
                     bio_items = [
-                        ("Măsuri",       extras.get("measurements")),
-                        ("Înălțime",     extras.get("height")),
-                        ("Greutate",     extras.get("weight")),
-                        ("Naționalitate",extras.get("nationality")),
-                        ("Etnicitate",   extras.get("ethnicity")),
-                        ("Păr",          extras.get("hair")),
-                        ("Ochi",         extras.get("eye_color")),
-                        ("Loc naștere",  extras.get("birthplace")),
-                        ("Activă",       f"{extras['career_start']} – {extras.get('career_end') or 'prezent'}"
-                                         if extras.get("career_start") else None),
+                        ("Măsuri",        extras.get("measurements")),
+                        ("Înălțime",      extras.get("height")),
+                        ("Greutate",      extras.get("weight")),
+                        ("Naționalitate", extras.get("nationality")),
+                        ("Etnicitate",    extras.get("ethnicity")),
+                        ("Păr",           extras.get("hair")),
+                        ("Ochi",          extras.get("eye_color")),
+                        ("Loc naștere",   extras.get("birthplace")),
+                        ("Activă",        f"{extras['career_start']} – {extras.get('career_end') or 'prezent'}"
+                                          if extras.get("career_start") else None),
                     ]
                     with ui.row().classes("flex-wrap gap-x-6 gap-y-1"):
                         for label, val in bio_items:
@@ -406,7 +468,9 @@ def _render_card(item: dict, subdir: str, media_type: str):
                     sr.clear()
                     if not results:
                         with rc:
-                            ui.label("Niciun torrent găsit.").classes("text-sm text-gray-400 py-4 text-center w-full")
+                            ui.label("Niciun torrent găsit.").classes(
+                                "text-sm text-gray-400 py-4 text-center w-full"
+                            )
                         return
                     with rc:
                         for r in results[:10]:

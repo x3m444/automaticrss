@@ -42,41 +42,69 @@ def search_performer(name: str) -> dict | None:
     }
 
 
-def search_movies(query: str, site: str = "", sort: str = "created_at", order: str = "desc",
+def search_sites(query: str, per_page: int = 10) -> list[dict]:
+    r = httpx.get(f"{BASE}/sites", params={"q": query, "per_page": per_page},
+                  headers=_headers(), timeout=10)
+    r.raise_for_status()
+    return [{"id": s.get("id"), "name": s.get("name", "")}
+            for s in r.json().get("data", []) if s.get("name")]
+
+
+def search_performers_lite(query: str, per_page: int = 8) -> list[dict]:
+    r = httpx.get(f"{BASE}/performers", params={"q": query, "per_page": per_page},
+                  headers=_headers(), timeout=10)
+    r.raise_for_status()
+    return [{"id": p.get("_id"), "name": p.get("name", "")}
+            for p in r.json().get("data", []) if p.get("name")]
+
+
+def search_movies(query: str, site: str = "", performer_id: int | None = None,
+                  sort: str = "created_at", order: str = "desc",
                   page: int = 1, per_page: int = 24) -> dict:
     params = {"q": query, "page": page, "per_page": per_page, "sort": sort, "order": order}
     if site:
         params["site"] = site
+    if performer_id:
+        params["performer_id"] = performer_id
     r = httpx.get(f"{BASE}/movies", params=params, headers=_headers(), timeout=15)
     r.raise_for_status()
     return _parse_movies_response(r.json())
 
 
-def get_latest_movies(site: str = "", sort: str = "created_at", order: str = "desc",
+def get_latest_movies(site: str = "", performer_id: int | None = None,
+                      sort: str = "created_at", order: str = "desc",
                       page: int = 1, per_page: int = 48) -> dict:
     params = {"page": page, "per_page": per_page, "sort": sort, "order": order}
     if site:
         params["site"] = site
+    if performer_id:
+        params["performer_id"] = performer_id
     r = httpx.get(f"{BASE}/movies", params=params, headers=_headers(), timeout=15)
     r.raise_for_status()
     return _parse_movies_response(r.json())
 
 
-def search_scenes(query: str, site: str = "", sort: str = "created_at", order: str = "desc",
+def search_scenes(query: str, site: str = "", performer_id: int | None = None,
+                  sort: str = "created_at", order: str = "desc",
                   page: int = 1, per_page: int = 24) -> dict:
     params = {"q": query, "page": page, "per_page": per_page, "sort": sort, "order": order}
     if site:
         params["site"] = site
+    if performer_id:
+        params["performer_id"] = performer_id
     r = httpx.get(f"{BASE}/scenes", params=params, headers=_headers(), timeout=15)
     r.raise_for_status()
     return _parse_scenes_response(r.json())
 
 
-def get_latest_scenes(site: str = "", sort: str = "created_at", order: str = "desc",
+def get_latest_scenes(site: str = "", performer_id: int | None = None,
+                      sort: str = "created_at", order: str = "desc",
                       page: int = 1, per_page: int = 48) -> dict:
     params = {"page": page, "per_page": per_page, "sort": sort, "order": order}
     if site:
         params["site"] = site
+    if performer_id:
+        params["performer_id"] = performer_id
     r = httpx.get(f"{BASE}/scenes", params=params, headers=_headers(), timeout=15)
     r.raise_for_status()
     return _parse_scenes_response(r.json())
