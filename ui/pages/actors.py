@@ -3,6 +3,14 @@ from nicegui import ui, run
 from ui.layout import navbar
 from core.scrapers import SCRAPERS
 
+SORT_OPTIONS = {
+    "created_at|desc": "Recente",
+    "date|desc":       "Data (desc)",
+    "rating|desc":     "Rating",
+    "title|asc":       "Titlu A→Z",
+    "title|desc":      "Titlu Z→A",
+}
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -81,6 +89,18 @@ def _fmt_size(n: int) -> str:
     return f"{n:.1f} TB"
 
 
+def _fmt_duration(secs: int | None) -> str:
+    if not secs:
+        return ""
+    h, m = divmod(secs // 60, 60)
+    return f"{h}h {m:02d}m" if h else f"{m}m"
+
+
+def _parse_sort(val: str) -> tuple[str, str]:
+    parts = val.split("|")
+    return (parts[0], parts[1]) if len(parts) == 2 else ("created_at", "desc")
+
+
 # ── Page ────────────────────────────────────────────────────────────────────
 
 @ui.page("/actors")
@@ -91,23 +111,23 @@ def actors_page():
         ui.label("Descoperă").classes("text-2xl font-bold")
 
         with ui.tabs().classes("w-full") as tabs:
-            tab_performer = ui.tab("Performer")
-            tab_film      = ui.tab("Caută Film")
-            tab_recente   = ui.tab("Recente")
+            tab_performer     = ui.tab("Performer")
+            tab_film          = ui.tab("Caută Film")
+            tab_film_recente  = ui.tab("Recente Filme")
+            tab_scene         = ui.tab("Caută Scenă")
+            tab_scene_recente = ui.tab("Recente Scene")
 
         with ui.tab_panels(tabs, value=tab_performer).classes("w-full"):
-
-            # ── Tab 1: Performer ─────────────────────────────────────────
             with ui.tab_panel(tab_performer):
                 _build_performer_tab()
-
-            # ── Tab 2: Caută Film ────────────────────────────────────────
             with ui.tab_panel(tab_film):
-                _build_movie_search_tab()
-
-            # ── Tab 3: Recente ───────────────────────────────────────────
-            with ui.tab_panel(tab_recente):
-                _build_recent_tab()
+                _build_search_tab("movies")
+            with ui.tab_panel(tab_film_recente):
+                _build_recent_tab("movies")
+            with ui.tab_panel(tab_scene):
+                _build_search_tab("scenes")
+            with ui.tab_panel(tab_scene_recente):
+                _build_recent_tab("scenes")
 
 
 # ── Tab: Performer ───────────────────────────────────────────────────────────
@@ -151,21 +171,27 @@ def _build_performer_tab():
                          last_page=movies_data["last_page"], total=movies_data["total"])
             status_lbl.set_text(f"{movies_data['total']} filme pentru {perf['name']}")
             _render_performer(performer_col, perf)
-            _render_movie_grid(movies_col, movies_data["movies"], perf["name"], state, movies_col)
+            _render_media_grid(movies_col, movies_data["movies"], "movies", perf["name"], state, movies_col)
 
         inp.on("keydown.enter", do_search)
         btn.on("click", do_search)
 
 
-# ── Tab: Caută Film ──────────────────────────────────────────────────────────
+# ── Tab: Caută Film / Scenă ──────────────────────────────────────────────────
 
-def _build_movie_search_tab():
-    state: dict = {"query": "", "page": 1, "last_page": 1}
+def _build_search_tab(media_type: str):
+    is_movie = media_type == "movies"
+    ph = "ex: Anal, Mia Malkova Experience…" if is_movie else "ex: Mia Malkova, Big Tits…"
+    found_lbl = "filme" if is_movie else "scene"
 
-    with ui.column().classes("w-full gap-4"):
-        with ui.row().classes("w-full items-center gap-3 max-w-xl"):
-            inp = ui.input(placeholder="ex: Anal, Mia Malkova Experience…").classes("flex-1")
-            btn = ui.button("Caută", icon="search").props("color=primary")
+    state: dict = {"page": 1, "last_page": 1}
+
+    with ui.column().classes("w-full gap-3"):
+        with ui.row().classes("w-full items-center gap-3 flex-wrap max-w-3xl"):
+            inp      = ui.input(placeholder=ph).classes("flex-1 min-w-48")
+            site_inp = ui.input(placeholder="Studio (ex: Brazzers)").classes("w-40")
+            sort_sel = ui.select(SORT_OPTIONS, value="created_at|desc", label="Sortare").classes("w-44")
+            btn      = ui.button("Caută", icon="search").props("color=primary")
 
         status_lbl  = ui.label("").classes("text-sm text-gray-400")
         results_col = ui.column().classes("w-full max-w-5xl")
@@ -174,51 +200,82 @@ def _build_movie_search_tab():
             query = inp.value.strip()
             if not query:
                 return
-            state["query"] = query
-            state["page"]  = 1
+            sort, order = _parse_sort(sort_sel.value)
+            site = site_inp.value.strip()
+            state["page"] = 1
             btn.props("loading")
             status_lbl.set_text("Se caută…")
             results_col.clear()
 
-            data = await run.io_bound(
-                lambda: __import__("core.scrapers.tpdb", fromlist=["search_movies"])
-                        .search_movies(query, page=1, per_page=24)
-            )
+            if is_movie:
+                data = await run.io_bound(
+                    lambda: __import__("core.scrapers.tpdb", fromlist=["search_movies"])
+                            .search_movies(query, site=site, sort=sort, order=order, page=1, per_page=24)
+                )
+                items = data["movies"]
+            else:
+                data = await run.io_bound(
+                    lambda: __import__("core.scrapers.tpdb", fromlist=["search_scenes"])
+                            .search_scenes(query, site=site, sort=sort, order=order, page=1, per_page=24)
+                )
+                items = data["scenes"]
+
             btn.props(remove="loading")
             state["last_page"] = data["last_page"]
-            status_lbl.set_text(f"{data['total']} filme găsite")
-            _render_movie_grid(results_col, data["movies"], "", state, results_col, use_movie_subdir=True)
+            status_lbl.set_text(f"{data['total']} {found_lbl} găsite")
+            _render_media_grid(results_col, items, media_type, "", state, results_col)
 
         inp.on("keydown.enter", do_search)
         btn.on("click", do_search)
 
 
-# ── Tab: Recente ─────────────────────────────────────────────────────────────
+# ── Tab: Recente Filme / Scene ───────────────────────────────────────────────
 
-def _build_recent_tab():
-    state: dict = {"page": 1, "last_page": 1, "loaded": False}
-    container = ui.column().classes("w-full max-w-5xl")
-    status_lbl = ui.label("Se încarcă…").classes("text-sm text-gray-400")
+def _build_recent_tab(media_type: str):
+    is_movie = media_type == "movies"
+    state: dict = {"page": 1, "last_page": 1}
 
-    async def load(page: int = 1):
-        state["page"] = page
-        container.clear()
-        status_lbl.set_text("Se încarcă…")
+    with ui.column().classes("w-full gap-3"):
+        with ui.row().classes("w-full items-center gap-3 flex-wrap max-w-3xl"):
+            site_inp = ui.input(placeholder="Studio (ex: Brazzers)").classes("w-40")
+            sort_sel = ui.select(SORT_OPTIONS, value="created_at|desc", label="Sortare").classes("w-44")
+            apply_btn = ui.button("Aplică", icon="filter_list").props("outline color=primary")
 
-        data = await run.io_bound(
-            lambda: __import__("core.scrapers.tpdb", fromlist=["get_latest_movies"])
-                    .get_latest_movies(page=page, per_page=48)
-        )
-        state["last_page"] = data["last_page"]
-        status_lbl.set_text(f"Ultimele filme — pagina {page} din {data['last_page']}")
-        _render_movie_grid(container, data["movies"], "", state, container,
-                           use_movie_subdir=True, on_page=load)
+        status_lbl = ui.label("Se încarcă…").classes("text-sm text-gray-400")
+        container  = ui.column().classes("w-full max-w-5xl")
 
-    ui.timer(0.2, lambda: run.io_bound(load), once=True)
+        async def load(page: int = 1):
+            state["page"] = page
+            container.clear()
+            status_lbl.set_text("Se încarcă…")
+            sort, order = _parse_sort(sort_sel.value)
+            site = site_inp.value.strip()
 
-    with ui.column().classes("w-full gap-2"):
-        status_lbl
-        container
+            if is_movie:
+                data = await run.io_bound(
+                    lambda: __import__("core.scrapers.tpdb", fromlist=["get_latest_movies"])
+                            .get_latest_movies(site=site, sort=sort, order=order, page=page, per_page=48)
+                )
+                items = data["movies"]
+                label = "Filme"
+            else:
+                data = await run.io_bound(
+                    lambda: __import__("core.scrapers.tpdb", fromlist=["get_latest_scenes"])
+                            .get_latest_scenes(site=site, sort=sort, order=order, page=page, per_page=48)
+                )
+                items = data["scenes"]
+                label = "Scene"
+
+            state["last_page"] = data["last_page"]
+            status_lbl.set_text(f"{label} — pagina {page} din {data['last_page']}")
+            _render_media_grid(container, items, media_type, "", state, container, on_page=load)
+
+        async def apply_filters(_=None):
+            state["page"] = 1
+            await load(1)
+
+        apply_btn.on("click", apply_filters)
+        ui.timer(0.2, lambda: run.io_bound(load), once=True)
 
 
 # ── Shared renderers ─────────────────────────────────────────────────────────
@@ -264,20 +321,24 @@ def _render_performer(container, perf: dict):
                           .classes("text-xs text-gray-400 mt-2 max-w-2xl")
 
 
-def _render_movie_grid(container, movies: list[dict], actor_name: str,
-                       state: dict, movies_col, use_movie_subdir: bool = False,
-                       on_page=None):
+def _render_media_grid(container, items: list[dict], media_type: str, actor_name: str,
+                       state: dict, col_ref, on_page=None):
     with container:
         with ui.grid().classes("w-full grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3"):
-            for movie in movies:
-                subdir = f"actors/{actor_name}" if actor_name else "movies"
-                _render_movie_card(movie, subdir)
+            for item in items:
+                if actor_name:
+                    subdir = f"actors/{actor_name}"
+                elif media_type == "scenes":
+                    subdir = "scenes"
+                else:
+                    subdir = "movies"
+                _render_card(item, subdir, media_type)
 
         if state.get("last_page", 1) > 1:
             with ui.row().classes("w-full justify-center items-center gap-4 mt-4"):
                 ui.label(f"Pagina {state['page']} din {state['last_page']}").classes("text-sm text-gray-400")
 
-                async def prev_page(s=state, mc=movies_col, an=actor_name, op=on_page):
+                async def prev_page(s=state, mc=col_ref, an=actor_name, op=on_page):
                     if s["page"] <= 1:
                         return
                     s["page"] -= 1
@@ -287,7 +348,7 @@ def _render_movie_grid(container, movies: list[dict], actor_name: str,
                     else:
                         await _reload_performer_page(s, mc, an)
 
-                async def next_page(s=state, mc=movies_col, an=actor_name, op=on_page):
+                async def next_page(s=state, mc=col_ref, an=actor_name, op=on_page):
                     if s["page"] >= s["last_page"]:
                         return
                     s["page"] += 1
@@ -306,25 +367,36 @@ async def _reload_performer_page(state: dict, container, actor_name: str):
         lambda: __import__("core.scrapers.tpdb", fromlist=["get_movies"])
                 .get_movies(state["slug"], page=state["page"], per_page=24)
     )
-    _render_movie_grid(container, data["movies"], actor_name, state, container)
+    _render_media_grid(container, data["movies"], "movies", actor_name, state, container)
 
 
-def _render_movie_card(movie: dict, subdir: str):
+def _render_card(item: dict, subdir: str, media_type: str):
     with ui.card().classes("p-0 overflow-hidden cursor-pointer hover:shadow-lg transition-shadow"):
 
-        def open_dialog(m=movie, sd=subdir):
+        def open_dialog(m=item, sd=subdir):
             with ui.dialog() as dlg, ui.card().classes("w-full max-w-2xl"):
                 with ui.row().classes("w-full justify-between items-center mb-1"):
                     with ui.column().classes("flex-1 gap-0 min-w-0"):
                         ui.label(m["title"]).classes("font-bold text-sm truncate")
+                        meta_parts = []
+                        if m.get("site"):
+                            meta_parts.append(m["site"])
+                        if m.get("date"):
+                            meta_parts.append(m["date"][:10])
+                        if m.get("duration"):
+                            meta_parts.append(_fmt_duration(m["duration"]))
+                        if meta_parts:
+                            ui.label(" · ".join(meta_parts)).classes("text-xs text-gray-500")
+                        if m.get("performers"):
+                            ui.label(", ".join(m["performers"])).classes("text-xs text-blue-400")
                         if m.get("tags"):
                             with ui.row().classes("gap-1 flex-wrap"):
                                 for tag in m["tags"]:
                                     ui.badge(tag, color="blue-grey").props("outline dense")
                     ui.button(icon="close", on_click=dlg.close).props("flat dense round")
 
-                spinner_row  = ui.row().classes("w-full justify-center py-4")
-                results_col  = ui.column().classes("w-full gap-0")
+                spinner_row = ui.row().classes("w-full justify-center py-4")
+                results_col = ui.column().classes("w-full gap-0")
                 with spinner_row:
                     ui.spinner()
 
@@ -343,8 +415,8 @@ def _render_movie_card(movie: dict, subdir: str):
                 ui.timer(0.1, load_torrents, once=True)
                 dlg.open()
 
-        if movie.get("poster"):
-            ui.image(movie["poster"]).classes("w-full aspect-video object-cover").on("click", open_dialog)
+        if item.get("poster"):
+            ui.image(item["poster"]).classes("w-full aspect-video object-cover").on("click", open_dialog)
         else:
             with ui.element("div").classes(
                 "w-full aspect-video bg-gray-800 flex items-center justify-center cursor-pointer"
@@ -352,9 +424,14 @@ def _render_movie_card(movie: dict, subdir: str):
                 ui.icon("movie", size="2rem").classes("text-gray-600")
 
         with ui.column().classes("p-2 gap-0"):
-            ui.label(movie["title"]).classes("text-xs font-medium line-clamp-2 leading-tight")
+            ui.label(item["title"]).classes("text-xs font-medium line-clamp-2 leading-tight")
             with ui.row().classes("w-full items-center justify-between mt-1"):
-                ui.label(movie.get("year", "")).classes("text-xs text-gray-500")
+                site_or_year = item.get("site") or item.get("year", "")
+                ui.label(site_or_year).classes("text-xs text-gray-500 truncate flex-1")
+                if item.get("performers"):
+                    ui.label(", ".join(item["performers"][:2])).classes(
+                        "text-xs text-blue-400 truncate max-w-[55%]"
+                    )
                 ui.button(icon="search", on_click=open_dialog).props(
                     "flat dense round color=primary size=xs"
                 ).tooltip("Caută torrente")

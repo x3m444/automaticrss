@@ -42,26 +42,44 @@ def search_performer(name: str) -> dict | None:
     }
 
 
-def search_movies(query: str, page: int = 1, per_page: int = 24) -> dict:
-    r = httpx.get(
-        f"{BASE}/movies",
-        params={"q": query, "page": page, "per_page": per_page},
-        headers=_headers(),
-        timeout=15,
-    )
+def search_movies(query: str, site: str = "", sort: str = "created_at", order: str = "desc",
+                  page: int = 1, per_page: int = 24) -> dict:
+    params = {"q": query, "page": page, "per_page": per_page, "sort": sort, "order": order}
+    if site:
+        params["site"] = site
+    r = httpx.get(f"{BASE}/movies", params=params, headers=_headers(), timeout=15)
     r.raise_for_status()
     return _parse_movies_response(r.json())
 
 
-def get_latest_movies(page: int = 1, per_page: int = 48) -> dict:
-    r = httpx.get(
-        f"{BASE}/movies",
-        params={"page": page, "per_page": per_page, "sort": "created_at", "order": "desc"},
-        headers=_headers(),
-        timeout=15,
-    )
+def get_latest_movies(site: str = "", sort: str = "created_at", order: str = "desc",
+                      page: int = 1, per_page: int = 48) -> dict:
+    params = {"page": page, "per_page": per_page, "sort": sort, "order": order}
+    if site:
+        params["site"] = site
+    r = httpx.get(f"{BASE}/movies", params=params, headers=_headers(), timeout=15)
     r.raise_for_status()
     return _parse_movies_response(r.json())
+
+
+def search_scenes(query: str, site: str = "", sort: str = "created_at", order: str = "desc",
+                  page: int = 1, per_page: int = 24) -> dict:
+    params = {"q": query, "page": page, "per_page": per_page, "sort": sort, "order": order}
+    if site:
+        params["site"] = site
+    r = httpx.get(f"{BASE}/scenes", params=params, headers=_headers(), timeout=15)
+    r.raise_for_status()
+    return _parse_scenes_response(r.json())
+
+
+def get_latest_scenes(site: str = "", sort: str = "created_at", order: str = "desc",
+                      page: int = 1, per_page: int = 48) -> dict:
+    params = {"page": page, "per_page": per_page, "sort": sort, "order": order}
+    if site:
+        params["site"] = site
+    r = httpx.get(f"{BASE}/scenes", params=params, headers=_headers(), timeout=15)
+    r.raise_for_status()
+    return _parse_scenes_response(r.json())
 
 
 def _parse_movies_response(data: dict) -> dict:
@@ -70,6 +88,7 @@ def _parse_movies_response(data: dict) -> dict:
         posters = m.get("posters") or {}
         poster = posters.get("medium") or posters.get("large") or m.get("poster") or m.get("image")
         tags = [t.get("name") for t in (m.get("tags") or [])[:6] if t.get("name")]
+        site_obj = m.get("site") or {}
         movies.append({
             "title":  m.get("title", ""),
             "date":   m.get("date", ""),
@@ -78,10 +97,42 @@ def _parse_movies_response(data: dict) -> dict:
             "url":    m.get("url", ""),
             "tags":   tags,
             "rating": m.get("rating", 0),
+            "site":   site_obj.get("name", ""),
         })
     meta = data.get("meta", {})
     return {
         "movies":       movies,
+        "total":        meta.get("total", 0),
+        "current_page": meta.get("current_page", 1),
+        "last_page":    meta.get("last_page", 1),
+    }
+
+
+def _parse_scenes_response(data: dict) -> dict:
+    scenes = []
+    for m in data.get("data", []):
+        poster = m.get("poster") or m.get("image")
+        bg = m.get("background") or {}
+        if not poster:
+            poster = bg.get("medium") or bg.get("large")
+        tags = [t.get("name") for t in (m.get("tags") or [])[:6] if t.get("name")]
+        performers = [p.get("name") for p in (m.get("performers") or [])[:4] if p.get("name")]
+        site_obj = m.get("site") or {}
+        scenes.append({
+            "title":      m.get("title", ""),
+            "date":       m.get("date", ""),
+            "year":       (m.get("date") or "")[:4],
+            "poster":     poster,
+            "url":        m.get("url", ""),
+            "tags":       tags,
+            "rating":     m.get("rating", 0),
+            "site":       site_obj.get("name", ""),
+            "performers": performers,
+            "duration":   m.get("duration"),
+        })
+    meta = data.get("meta", {})
+    return {
+        "scenes":       scenes,
         "total":        meta.get("total", 0),
         "current_page": meta.get("current_page", 1),
         "last_page":    meta.get("last_page", 1),
