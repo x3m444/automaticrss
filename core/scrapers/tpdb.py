@@ -42,6 +42,52 @@ def search_performer(name: str) -> dict | None:
     }
 
 
+def search_movies(query: str, page: int = 1, per_page: int = 24) -> dict:
+    r = httpx.get(
+        f"{BASE}/movies",
+        params={"q": query, "page": page, "per_page": per_page},
+        headers=_headers(),
+        timeout=15,
+    )
+    r.raise_for_status()
+    return _parse_movies_response(r.json())
+
+
+def get_latest_movies(page: int = 1, per_page: int = 48) -> dict:
+    r = httpx.get(
+        f"{BASE}/movies",
+        params={"page": page, "per_page": per_page, "sort": "created_at", "order": "desc"},
+        headers=_headers(),
+        timeout=15,
+    )
+    r.raise_for_status()
+    return _parse_movies_response(r.json())
+
+
+def _parse_movies_response(data: dict) -> dict:
+    movies = []
+    for m in data.get("data", []):
+        posters = m.get("posters") or {}
+        poster = posters.get("medium") or posters.get("large") or m.get("poster") or m.get("image")
+        tags = [t.get("name") for t in (m.get("tags") or [])[:6] if t.get("name")]
+        movies.append({
+            "title":  m.get("title", ""),
+            "date":   m.get("date", ""),
+            "year":   (m.get("date") or "")[:4],
+            "poster": poster,
+            "url":    m.get("url", ""),
+            "tags":   tags,
+            "rating": m.get("rating", 0),
+        })
+    meta = data.get("meta", {})
+    return {
+        "movies":       movies,
+        "total":        meta.get("total", 0),
+        "current_page": meta.get("current_page", 1),
+        "last_page":    meta.get("last_page", 1),
+    }
+
+
 def get_movies(slug: str, page: int = 1, per_page: int = 24) -> dict:
     r = httpx.get(
         f"{BASE}/performers/{slug}/movies",
