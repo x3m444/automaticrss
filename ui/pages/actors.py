@@ -103,8 +103,11 @@ def actors_page():
             results_col.clear()
 
             def _fetch():
-                from core.scrapers.iafd import search_performer
-                return search_performer(query)
+                from core.scrapers.iafd import search_performer, get_performer_details
+                basic = search_performer(query)
+                if not basic:
+                    return None
+                return get_performer_details(basic["iafd_url"])
 
             result = await run.io_bound(_fetch)
             search_btn.props(remove="loading")
@@ -121,37 +124,57 @@ def actors_page():
 
 
 def _render_result(container, result: dict):
+    bio = result.get("bio", {})
+
     with container:
         # ── Card performer ───────────────────────────────────────────────
         with ui.card().classes("w-full max-w-4xl"):
-            with ui.row().classes("items-center gap-4"):
+            with ui.row().classes("items-start gap-6"):
                 if result.get("photo_url"):
-                    ui.image(result["photo_url"]).classes("w-24 h-24 rounded-full object-cover shrink-0")
+                    ui.image(result["photo_url"]).classes("w-32 h-32 rounded-lg object-cover shrink-0")
                 else:
-                    ui.icon("person", size="4rem").classes("text-gray-400 shrink-0")
-                with ui.column().classes("gap-1"):
-                    ui.label(result["name"]).classes("text-xl font-bold")
-                    ui.label(f"{len(result['movies'])} titluri în baza IAFD").classes("text-sm text-gray-400")
-                    if result.get("iafd_url"):
-                        ui.link("Vezi pe IAFD", result["iafd_url"], new_tab=True).classes("text-xs text-blue-400")
+                    ui.icon("person", size="5rem").classes("text-gray-400 shrink-0")
+
+                with ui.column().classes("gap-1 flex-1"):
+                    with ui.row().classes("items-center gap-3"):
+                        ui.label(result["name"]).classes("text-xl font-bold")
+                        if result.get("iafd_url"):
+                            ui.link("IAFD", result["iafd_url"], new_tab=True).classes("text-xs text-blue-400")
+
+                    ui.label(f"{len(result['movies'])} filme în filmografie").classes("text-sm text-gray-400")
+
+                    if bio:
+                        with ui.row().classes("flex-wrap gap-x-6 gap-y-1 mt-2"):
+                            for key, label in [
+                                ("measurements", "Măsuri"), ("height", "Înălțime"),
+                                ("nationality", "Naționalitate"), ("hair", "Păr"),
+                                ("ethnicity", "Etnicitate"),
+                            ]:
+                                if bio.get(key):
+                                    with ui.row().classes("gap-1 items-center"):
+                                        ui.label(f"{label}:").classes("text-xs text-gray-500")
+                                        ui.label(bio[key]).classes("text-xs font-medium")
 
         # ── Lista filme ──────────────────────────────────────────────────
         with ui.card().classes("w-full max-w-4xl"):
             ui.label("Filmografie — apasă Caută pentru torrente").classes("text-lg font-semibold mb-2")
 
             for movie in result["movies"]:
-                with ui.column().classes("w-full gap-1"):
+                with ui.column().classes("w-full gap-0"):
                     torrent_area = ui.column().classes("w-full")
 
                     with ui.row().classes("w-full items-center gap-3 py-1"):
                         ui.label(movie["year"]).classes("text-xs text-gray-400 w-10 shrink-0")
-                        ui.label(movie["title"]).classes("flex-1 text-sm")
+                        with ui.column().classes("flex-1 gap-0"):
+                            ui.label(movie["title"]).classes("text-sm")
+                            if movie.get("distributor"):
+                                ui.label(movie["distributor"]).classes("text-xs text-gray-500")
                         ui.link("IAFD", movie["iafd_url"], new_tab=True).classes("text-xs text-gray-500 shrink-0")
 
                         async def cauta_torrente(title=movie["title"], area=torrent_area):
                             area.clear()
                             with area:
-                                spinner = ui.spinner(size="sm")
+                                ui.spinner(size="sm")
                             flare = await run.io_bound(_get_flaresolverr)
                             results = await run.io_bound(_search_torrents, title, flare)
                             area.clear()
@@ -183,11 +206,9 @@ def _render_torrents(results: list[dict], movie_title: str):
                 ui.label(src).classes("text-gray-600 shrink-0")
 
             async def do_download(item=r):
-                def _dl():
-                    return _send_download(item, None)
-                ok, msg = await run.io_bound(_dl)
+                ok, msg = await run.io_bound(_send_download, item, None)
                 if ok:
-                    ui.notify(f"✓ Adăugat în Transmission", type="positive")
+                    ui.notify("✓ Adăugat în Transmission", type="positive")
                 else:
                     ui.notify(f"✘ {msg}", type="negative", timeout=8000)
 
