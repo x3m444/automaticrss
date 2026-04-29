@@ -1,6 +1,29 @@
 import re
+import logging as _logging
+from datetime import datetime as _dt, timedelta as _td
 from core.db import Session, Watchlist, SeenItem, Download
 from core.filters import apply_global_filters, get_global_filters
+
+_log = _logging.getLogger(__name__)
+
+# Transmission backoff: după un eșec de conectare, nu mai încercăm 2 minute
+_tx_down_until: _dt | None = None
+_TX_BACKOFF_SECONDS = 120
+
+
+def _tx_is_up() -> bool:
+    return _tx_down_until is None or _dt.utcnow() >= _tx_down_until
+
+
+def _mark_tx_down():
+    global _tx_down_until
+    _tx_down_until = _dt.utcnow() + _td(seconds=_TX_BACKOFF_SECONDS)
+    _log.warning("[TX] Transmission inaccesibil — se suspendă trimiterile pentru %ds", _TX_BACKOFF_SECONDS)
+
+
+def _mark_tx_up():
+    global _tx_down_until
+    _tx_down_until = None
 
 
 def _norm(s: str) -> str:
@@ -20,41 +43,46 @@ def _mark_seen(feed_id: int, guid: str, title: str):
             s.commit()
 
 
-def _send_to_transmission(item: dict, subdir: str | None) -> bool:
+# Valori returnate de _send_to_transmission:
+#   "ok"       — adăugat cu succes
+#   "no_link"  — item fără magnet/torrent (URL streaming etc.) → marcat seen
+#   "tx_down"  — Transmission inaccesibil → NU marcat seen, backoff activat
+#   "error"    — altă eroare (duplicat etc.) → marcat seen pentru a evita retry infinit
+
+def _send_to_transmission(item: dict, subdir: str | None) -> str:
+    magnet = item.get("magnet") or item.get("link") or ""
+    has_getter = bool(item.get("_magnet_getter"))
+
+    if not magnet.startswith("magnet:") and has_getter:
+        magnet = item["_magnet_getter"]() or ""
+
+    torrent_url = item.get("torrent_url") or ""
+
+    if not magnet.startswith("magnet:") and not (torrent_url and torrent_url.endswith(".torrent")):
+        return "no_link"
+
     try:
         from transmission_rpc import Client
         from core.instance import get_instance
         from core.config import INSTANCE_ID
         inst = get_instance()
-        host     = inst["transmission_host"]
-        port     = inst["transmission_port"]
-        user     = inst["transmission_user"]
-        pwd      = inst["transmission_pass"]
+        client = Client(
+            host=inst["transmission_host"],
+            port=inst["transmission_port"],
+            username=inst["transmission_user"],
+            password=inst["transmission_pass"],
+            timeout=5,
+        )
         base_dir = inst["download_dir"]
-
-        client = Client(host=host, port=port, username=user, password=pwd)
         download_dir = f"{base_dir.rstrip('/')}/{subdir}" if subdir and base_dir else base_dir or None
-
-        magnet = item.get("magnet") or item.get("link") or ""
-        has_getter = bool(item.get("_magnet_getter"))
-
-        # Scraper items: link points to a detail page — resolve magnet lazily
-        if not magnet.startswith("magnet:") and has_getter:
-            magnet = item["_magnet_getter"]() or ""
-
-        torrent_url = item.get("torrent_url") or ""
-
-        kwargs = {}
-        if download_dir:
-            kwargs["download_dir"] = download_dir
+        kwargs = {"download_dir": download_dir} if download_dir else {}
 
         if magnet.startswith("magnet:"):
             t = client.add_torrent(magnet, **kwargs)
-        elif torrent_url and torrent_url.endswith(".torrent"):
-            t = client.add_torrent(torrent_url, **kwargs)
         else:
-            return False
+            t = client.add_torrent(torrent_url, **kwargs)
 
+        _mark_tx_up()
         with Session() as s:
             if not s.query(Download).filter_by(torrent_hash=t.hashString).first():
                 s.add(Download(
@@ -65,9 +93,14 @@ def _send_to_transmission(item: dict, subdir: str | None) -> bool:
                     size_bytes=item.get("size_bytes"),
                 ))
                 s.commit()
-        return True
-    except Exception:
-        return False
+        return "ok"
+    except Exception as ex:
+        msg = str(ex).lower()
+        if any(k in msg for k in ("connection", "refused", "timeout", "timed out", "unreachable", "network")):
+            _mark_tx_down()
+            return "tx_down"
+        # Duplicat sau altă eroare Transmission — marcat seen pentru a evita retry infinit
+        return "error"
 
 
 def _matches_watchlist_term(title: str, entry: Watchlist) -> str | None:
@@ -82,22 +115,18 @@ def _matches_watchlist_term(title: str, entry: Watchlist) -> str | None:
     return None
 
 
-import logging as _logging
 _wl_log = _logging.getLogger("watchlist")
 
 
 def run_watchlist_entry_now(entry_id: int) -> str:
     """
     Polls all relevant feeds for a specific watchlist entry.
-    Pipeline: read RSS → term match → exclusions → global filters (with rejection log) → Transmission.
+    Pipeline: read RSS → term match → exclusions → global filters → Transmission.
     Updates last_run_at, writes WatchlistLog. Returns a human-readable summary.
     """
-    from datetime import datetime as _dt
     from core.db import Feed, Setting, WatchlistLog
-
     from core.rss_parser import fetch_feed
     from core.scrapers import get_scraper
-    from core.filters import get_global_filters, apply_global_filters
 
     with Session() as s:
         entry = s.query(Watchlist).filter_by(id=entry_id).first()
@@ -109,7 +138,7 @@ def run_watchlist_entry_now(entry_id: int) -> str:
         subdir    = entry.download_subdir
         name      = entry.name
         feed_ids  = list(entry.feed_ids or [])
-        log_level = entry.log_level or "full"  # full | sent | summary
+        log_level = entry.log_level or "full"
 
         if feed_ids:
             feeds = s.query(Feed).filter(
@@ -131,6 +160,7 @@ def run_watchlist_entry_now(entry_id: int) -> str:
     sent = 0
     checked = 0
     blocked = 0
+    tx_suspended = False
     log_entries: list[dict] = []
 
     for feed in feed_list:
@@ -165,7 +195,6 @@ def run_watchlist_entry_now(entry_id: int) -> str:
 
                 t_norm = _norm(title)
 
-                # Excluderi
                 blocked_by_excl = next((e for e in excl if _norm(e) in t_norm), None)
                 if blocked_by_excl:
                     _wl_log.debug("[%s] exclus '%s': %s", name, blocked_by_excl, title)
@@ -174,14 +203,12 @@ def run_watchlist_entry_now(entry_id: int) -> str:
                     blocked += 1
                     continue
 
-                # Potrivire termeni (OR)
                 matched_term = next((t for t in terms if _norm(t) in t_norm), None)
                 if not matched_term:
                     if log_level == "verbose":
                         log_entries.append({"title": title, "action": "nomatch", "reason": "fără potrivire"})
                     continue
 
-                # Filtre globale
                 passed, reason = apply_global_filters(item, global_filters)
                 if not passed:
                     _wl_log.info("[%s] blocat (%s): %s", name, reason, title)
@@ -190,15 +217,41 @@ def run_watchlist_entry_now(entry_id: int) -> str:
                     blocked += 1
                     continue
 
-                ok = _send_to_transmission(item, subdir)
-                if ok:
+                # Dacă Transmission e suspendat (down), sărim trimiterile
+                if not _tx_is_up():
+                    if not tx_suspended:
+                        tx_suspended = True
+                        _wl_log.warning("[%s] Transmission suspendat — trimiterile se reiau la revenire", name)
+                    if log_level in ("full", "verbose"):
+                        log_entries.append({"title": title, "action": "skipped", "reason": "Transmission inaccesibil"})
+                    continue
+
+                result = _send_to_transmission(item, subdir)
+
+                if result == "ok":
                     sent += 1
                     _mark_seen(feed["id"], guid, title)
                     _wl_log.info("[%s] ✓ trimis '%s': %s", name, matched_term, title)
                     if log_level in ("full", "sent", "verbose"):
                         log_entries.append({"title": title, "action": "sent", "reason": f'termen: "{matched_term}"'})
-                else:
-                    _wl_log.warning("[%s] eroare Transmission: %s", name, title)
+
+                elif result == "no_link":
+                    # Item fără magnet/torrent (ex: link streaming) — marcat seen, nu se mai încearcă
+                    _mark_seen(feed["id"], guid, title)
+                    _wl_log.debug("[%s] fără link torrent (ignorat): %s", name, title)
+                    if log_level in ("full", "verbose"):
+                        log_entries.append({"title": title, "action": "no_link", "reason": "fără magnet/torrent"})
+
+                elif result == "tx_down":
+                    # Transmission inaccesibil — nu marcăm seen, reîncercăm la revenire
+                    tx_suspended = True
+                    _wl_log.warning("[%s] Transmission inaccesibil — '%s' se reîncercă", name, title)
+                    if log_level in ("full", "verbose"):
+                        log_entries.append({"title": title, "action": "skipped", "reason": "Transmission inaccesibil"})
+
+                else:  # "error" — duplicat sau altă eroare Transmission
+                    _mark_seen(feed["id"], guid, title)
+                    _wl_log.warning("[%s] eroare Transmission (marcat seen): %s", name, title)
                     if log_level in ("full", "sent", "verbose"):
                         log_entries.append({"title": title, "action": "error", "reason": "eroare Transmission"})
 
@@ -222,6 +275,8 @@ def run_watchlist_entry_now(entry_id: int) -> str:
         ))
         s.commit()
 
+    if tx_suspended:
+        return "Transmission inaccesibil — trimiterile se reiau la revenire"
     if sent > 0:
         return f"✓ {sent} torente noi trimise la Transmission"
     if checked == 0:
