@@ -11,11 +11,21 @@ _HEADERS = {
     )
 }
 
+import time as _time
+_mirror_cache: tuple[str, float] | None = None
+_MIRROR_TTL = 300  # re-test after 5 minutes
+
 def _get_base() -> str:
+    global _mirror_cache
+    if _mirror_cache:
+        cached_url, cached_at = _mirror_cache
+        if _time.monotonic() - cached_at < _MIRROR_TTL:
+            return cached_url
     for mirror in _MIRRORS:
         try:
             r = httpx.get(f"{mirror}/", headers=_HEADERS, timeout=8, follow_redirects=True)
             if r.status_code == 200 and "Just a moment" not in r.text:
+                _mirror_cache = (mirror, _time.monotonic())
                 return mirror
         except Exception:
             pass
