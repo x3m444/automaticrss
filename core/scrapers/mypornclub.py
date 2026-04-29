@@ -19,7 +19,10 @@ class MyPornClub(BaseScraper):
     def search(self, query: str, categories: list[str] | None = None, flaresolverr_url: str | None = None) -> list[dict]:
         slug = query.strip().replace(" ", "-")
         html = http_get(f"{BASE}/s/{slug}", flaresolverr_url=flaresolverr_url)
-        return _parse_listing(html)
+        items = _parse_listing(html)
+        for i in items:
+            i["source"] = self.name
+        return items
 
     def get_magnet(self, detail_url: str, flaresolverr_url: str | None = None) -> str | None:
         html = http_get(detail_url, flaresolverr_url=flaresolverr_url)
