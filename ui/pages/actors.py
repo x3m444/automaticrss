@@ -1,7 +1,23 @@
+import time
 import threading
 from nicegui import ui, run
 from ui.layout import navbar
 from core.scrapers import SCRAPERS
+
+# Cache simplu în memorie pentru tab-urile "Recente" — TTL 5 minute
+_recent_cache: dict[str, tuple[dict, float]] = {}
+_CACHE_TTL = 300
+
+
+def _cache_get(key: str) -> dict | None:
+    entry = _recent_cache.get(key)
+    if entry and time.monotonic() < entry[1]:
+        return entry[0]
+    return None
+
+
+def _cache_set(key: str, data: dict):
+    _recent_cache[key] = (data, time.monotonic() + _CACHE_TTL)
 
 SORT_OPTIONS = {
     "created_at|desc": "Recente",
@@ -308,26 +324,31 @@ def _build_recent_tab(media_type: str):
         async def load(page: int = 1):
             state["page"] = page
             container.clear()
-            status_lbl.set_text("Se încarcă…")
             sort, order  = _parse_sort(sort_sel.value)
             site_name    = (filters["site"] or {}).get("name", "")
             performer_id = (filters["performer"] or {}).get("id")
 
-            if is_movie:
-                data = await run.io_bound(
-                    lambda: __import__("core.scrapers.tpdb", fromlist=["get_latest_movies"])
-                            .get_latest_movies(site=site_name, performer_id=performer_id,
-                                               sort=sort, order=order, page=page, per_page=48)
-                )
-                items, label = data["movies"], "Filme"
-            else:
-                data = await run.io_bound(
-                    lambda: __import__("core.scrapers.tpdb", fromlist=["get_latest_scenes"])
-                            .get_latest_scenes(site=site_name, performer_id=performer_id,
-                                               sort=sort, order=order, page=page, per_page=48)
-                )
-                items, label = data["scenes"], "Scene"
+            cache_key = f"{media_type}|{site_name}|{performer_id}|{sort}|{order}|{page}"
+            data = _cache_get(cache_key)
 
+            if data is None:
+                status_lbl.set_text("Se încarcă…")
+                if is_movie:
+                    data = await run.io_bound(
+                        lambda: __import__("core.scrapers.tpdb", fromlist=["get_latest_movies"])
+                                .get_latest_movies(site=site_name, performer_id=performer_id,
+                                                   sort=sort, order=order, page=page, per_page=24)
+                    )
+                else:
+                    data = await run.io_bound(
+                        lambda: __import__("core.scrapers.tpdb", fromlist=["get_latest_scenes"])
+                                .get_latest_scenes(site=site_name, performer_id=performer_id,
+                                                   sort=sort, order=order, page=page, per_page=24)
+                    )
+                _cache_set(cache_key, data)
+
+            items = data["movies"] if is_movie else data["scenes"]
+            label = "Filme" if is_movie else "Scene"
             state["last_page"] = data["last_page"]
             status_lbl.set_text(f"{label} — pagina {page} din {data['last_page']}")
             _render_media_grid(container, items, media_type, "", state, container, on_page=load)
@@ -337,7 +358,7 @@ def _build_recent_tab(media_type: str):
             await load(1)
 
         apply_btn.on("click", apply_filters)
-        ui.timer(0.2, lambda: run.io_bound(load), once=True)
+        ui.timer(0.2, load, once=True)
 
 
 # ── Shared renderers ─────────────────────────────────────────────────────────
