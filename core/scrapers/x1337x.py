@@ -1,5 +1,25 @@
 from bs4 import BeautifulSoup
 from core.scrapers.base import BaseScraper, http_get, parse_int
+import httpx
+
+_MIRRORS = ["https://1337xx.to", "https://1337x.is", "https://1337x.to"]
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+}
+
+def _get_base() -> str:
+    for mirror in _MIRRORS:
+        try:
+            r = httpx.get(f"{mirror}/", headers=_HEADERS, timeout=8, follow_redirects=True)
+            if r.status_code == 200 and "Just a moment" not in r.text:
+                return mirror
+        except Exception:
+            pass
+    return _MIRRORS[0]
 
 _BASE = "https://1337x.to"
 
@@ -191,11 +211,12 @@ class X1337x(BaseScraper):
     def search(self, query: str, flaresolverr_url: str | None = None) -> list[dict]:
         try:
             from urllib.parse import quote
+            base = _get_base()
             html = http_get(
-                f"{_BASE}/search/{quote(query, safe='')}/1/",
+                f"{base}/search/{quote(query, safe='')}/1/",
                 flaresolverr_url=flaresolverr_url,
             )
-            items = _parse_listing(html)
+            items = _parse_listing(html, base)
             for i in items:
                 i["source"] = self.name
             return items
@@ -219,13 +240,14 @@ class X1337x(BaseScraper):
         items: list[dict] = []
         seen_guids: set[str] = set()
 
+        base = _get_base()
         for cat in url_cats:
             try:
                 html = http_get(
-                    f"{_BASE}/cat/{cat}/1/",
+                    f"{base}/cat/{cat}/1/",
                     flaresolverr_url=flaresolverr_url,
                 )
-                for item in _parse_listing(html):
+                for item in _parse_listing(html, base):
                     if item["guid"] not in seen_guids:
                         seen_guids.add(item["guid"])
                         items.append(item)
@@ -236,6 +258,10 @@ class X1337x(BaseScraper):
 
     def get_magnet(self, detail_url: str, flaresolverr_url: str | None = None) -> str | None:
         try:
+            # Rewrite domain to working mirror if needed
+            base = _get_base()
+            for mirror in _MIRRORS:
+                detail_url = detail_url.replace(mirror, base)
             html = http_get(detail_url, flaresolverr_url=flaresolverr_url)
             soup = BeautifulSoup(html, "html.parser")
             a = soup.select_one('a[href^="magnet:"]')
@@ -244,7 +270,7 @@ class X1337x(BaseScraper):
             return None
 
 
-def _parse_listing(html: str) -> list[dict]:
+def _parse_listing(html: str, base: str = _BASE) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     items = []
 
@@ -256,7 +282,7 @@ def _parse_listing(html: str) -> list[dict]:
         href  = name_a.get("href", "")
         if not href:
             continue
-        detail_url = _BASE + href
+        detail_url = base + href
 
         seeds   = parse_int(_text(row, "td.seeds"))
         leeches = parse_int(_text(row, "td.leeches"))

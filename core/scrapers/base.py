@@ -19,28 +19,9 @@ def http_get(url: str, flaresolverr_url: str | None = None, timeout: int = 20) -
         r.raise_for_status()
         return r.json()["solution"]["response"]
 
-    try:
-        r = httpx.get(url, headers=HEADERS, follow_redirects=True, timeout=timeout)
-        if r.status_code not in (403, 429, 503):
-            r.raise_for_status()
-            return r.text
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code not in (403, 429, 503):
-            raise
-
-    return _playwright_get(url, timeout)
-
-
-def _playwright_get(url: str, timeout: int = 20) -> str:
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(user_agent=HEADERS["User-Agent"])
-        page = ctx.new_page()
-        page.goto(url, timeout=timeout * 1000, wait_until="networkidle")
-        content = page.content()
-        browser.close()
-        return content
+    r = httpx.get(url, headers=HEADERS, follow_redirects=True, timeout=timeout)
+    r.raise_for_status()
+    return r.text
 
 
 def parse_size(s: str) -> int:

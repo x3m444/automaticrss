@@ -9,4 +9,3 @@ toml
 alembic
 beautifulsoup4
 curl-cffi
-playwright
