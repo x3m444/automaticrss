@@ -141,9 +141,7 @@ def feeds_page():
                                 f"Indexer: {sc.name if sc else feed['indexer_id']}"
                             ).classes("text-sm text-gray-400")
 
-                        interval_inp = ui.number(
-                            "Interval (min)", value=feed["poll_interval_minutes"], min=5
-                        ).classes("w-40")
+                        interval_inp = None
                         active_sw = ui.switch("Activ", value=feed["is_active"])
 
                         ui.label("Categorii").classes("text-sm font-medium mt-2")
@@ -185,7 +183,7 @@ def feeds_page():
                                     row.name = name_inp.value.strip() or feed["name"]
                                     if url_inp:
                                         row.url = url_inp.value.strip() or feed["url"]
-                                    row.poll_interval_minutes = int(interval_inp.value or 60)
+                                    pass  # interval kept as-is in DB
                                     row.is_active = active_sw.value
                                     row.categories = cur_cats if cur_cats else None
                                     s.commit()
@@ -226,9 +224,6 @@ def feeds_page():
                                         "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
                                     )
 
-                                ui.label(f"{f['poll_interval_minutes']}min").classes(
-                                    "text-xs text-gray-400 shrink-0"
-                                )
                                 ui.badge("activ" if f["is_active"] else "oprit").props(
                                     f"color={'green' if f['is_active'] else 'grey'}"
                                 ).classes("shrink-0")
@@ -258,7 +253,6 @@ def feeds_page():
                 with ui.row().classes("w-full items-end gap-3 flex-wrap"):
                     url_input  = ui.input("URL Feed RSS").classes("flex-1 min-w-64")
                     name_input = ui.input("Nume prietenos").classes("flex-1 min-w-48")
-                    interval   = ui.number("Interval (min)", value=60, min=5).classes("w-32")
                     ui.button("Validează", on_click=lambda: on_validate()).props("outline")
                     ui.button("Salvează",  on_click=lambda: on_save())
 
@@ -304,7 +298,7 @@ def feeds_page():
                             name=name_input.value,
                             url=url_input.value,
                             source_type="rss",
-                            poll_interval_minutes=int(interval.value),
+                            poll_interval_minutes=60,
                             categories=cats if cats else None,
                             is_active=True,
                         ))
@@ -332,7 +326,7 @@ def feeds_page():
                 with ui.row().classes("items-end gap-4 flex-wrap"):
                     sc_select   = ui.select(scraper_options, label="Indexer", value=first_id).classes("w-56")
                     sc_name_input = ui.input("Nume (opțional)").classes("flex-1 min-w-48")
-                    sc_interval = ui.number("Interval (min)", value=60, min=5).classes("w-32")
+                    sc_interval = None
 
                 sc_desc = ui.label("").classes("text-xs text-gray-400")
 
@@ -444,7 +438,7 @@ def feeds_page():
                             url=cls.base_url,
                             source_type="scraper",
                             indexer_id=sc_id,
-                            poll_interval_minutes=int(sc_interval.value),
+                            poll_interval_minutes=60,
                             categories=added_cats[:] if added_cats else None,
                             is_active=True,
                         ))
