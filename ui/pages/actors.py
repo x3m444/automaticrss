@@ -34,6 +34,15 @@ def _search_torrents(query: str, flaresolverr: str | None) -> list[dict]:
     lock = threading.Lock()
     found: list[dict] = []
 
+    # Cuvinte semnificative (>3 chars) folosite pentru post-filtrare rezultate irelevante
+    sig_words = [w.lower() for w in query.split() if len(w) > 3]
+
+    def _relevant(title: str) -> bool:
+        if not sig_words:
+            return True
+        t = title.lower()
+        return all(w in t for w in sig_words)
+
     def search_one(sc_id: str):
         cls = SCRAPERS.get(sc_id)
         if not cls:
@@ -46,8 +55,9 @@ def _search_torrents(query: str, flaresolverr: str | None) -> list[dict]:
                     item["_magnet_getter"] = lambda url=item["url"]: scraper.get_magnet(
                         url, flaresolverr_url=flaresolverr
                     )
+            relevant = [i for i in items if _relevant(i.get("title", ""))]
             with lock:
-                found.extend(items)
+                found.extend(relevant)
         except Exception:
             pass
 

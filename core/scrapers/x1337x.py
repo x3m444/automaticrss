@@ -221,9 +221,11 @@ class X1337x(BaseScraper):
     def search(self, query: str, flaresolverr_url: str | None = None) -> list[dict]:
         try:
             from urllib.parse import quote
+            # Eliminăm cuvintele scurte (<=3 chars) care produc false positives pe 1337x
+            meaningful = " ".join(w for w in query.split() if len(w) > 3) or query
             base = _get_base()
             html = http_get(
-                f"{base}/search/{quote(query, safe='')}/1/",
+                f"{base}/search/{quote(meaningful, safe='')}/1/",
                 flaresolverr_url=flaresolverr_url,
             )
             items = _parse_listing(html, base)
