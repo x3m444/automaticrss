@@ -250,8 +250,17 @@ def _render_file(f: Path, dl_dir: str, indent: int = 0, extra_stop: list | None 
 
 def _render_dir(path: Path, dl_dir: str, indent: int = 0, extra_stop: list | None = None,
                 t_info: dict | None = None, on_refresh=None, by_full_path: dict | None = None):
+    import shutil
     size_str   = _fmt_size(_dir_size(path))
     clean_name = clean_title(path.name, extra_stop)
+
+    # Caută torrентul asociat acestui folder în Transmission
+    dir_t_info = t_info
+    if by_full_path:
+        path_str = str(path)
+        dir_t_info = (by_full_path.get(path_str)
+                      or by_full_path.get(path_str.replace("\\", "/"))
+                      or t_info)
 
     with ui.expansion(clean_name).classes("w-full").props("dense") as exp:
         with exp.add_slot("header"):
@@ -261,6 +270,37 @@ def _render_dir(path: Path, dl_dir: str, indent: int = 0, extra_stop: list | Non
                 if clean_name != path.name:
                     lbl.tooltip(path.name)
                 ui.label(size_str).classes("text-xs text-gray-400 shrink-0")
+
+                async def do_delete_dir(p=path, ti=dir_t_info):
+                    async def confirm():
+                        def _del():
+                            if ti:
+                                try:
+                                    _delete_torrent(ti["id"], delete_data=False)
+                                except Exception:
+                                    pass
+                            shutil.rmtree(p, ignore_errors=True)
+                        try:
+                            await run.io_bound(_del)
+                            ui.notify(f"Folder șters: {p.name}", type="warning")
+                            if on_refresh:
+                                await on_refresh()
+                        except Exception as ex:
+                            ui.notify(str(ex), type="negative", timeout=8000)
+
+                    with ui.dialog() as dlg, ui.card():
+                        ui.label(f"Ștergi folderul «{clean_name}» și tot conținutul?").classes("font-medium")
+                        with ui.row().classes("gap-2 mt-2"):
+                            ui.button("Anulează", on_click=dlg.close).props("flat")
+                            async def do_confirm(d=dlg):
+                                d.close()
+                                await confirm()
+                            ui.button("Șterge", on_click=do_confirm).props("color=red")
+                    dlg.open()
+
+                ui.button(icon="delete_outline", on_click=do_delete_dir).props(
+                    "flat dense round color=red size=xs"
+                ).tooltip("Șterge folder + elimină torrent din Transmission")
 
         children = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
         for child in children:
